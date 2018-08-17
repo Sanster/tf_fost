@@ -55,9 +55,10 @@ def parse_mlt_line(pnts, im_scale=1):
     return pnts, splited_line[-2], splited_line[-1]
 
 
-def load_mlt_gt(gt_path):
+def load_mlt_gt(gt_path, include_ignore=False):
     """
     :param gt_path:
+    :param include_ignore: if true，只包含有效区域
     :return: [
             [[x1,y1],[x2,y2],[x3,y3],[x4,y4]],language,text,ignore],
             ...
@@ -74,7 +75,12 @@ def load_mlt_gt(gt_path):
         ignore = False
         if line[1] in MLT_IGNORE_LANGUAGES or line[2] == MLT_IGNORE_TEXT:
             ignore = True
-        out.append([line[0], line[1], line[2], ignore])
+
+        if include_ignore:
+            out.append([line[0], line[1], line[2], ignore])
+        else:
+            if not ignore:
+                out.append([line[0], line[1], line[2], ignore])
 
     return out
 

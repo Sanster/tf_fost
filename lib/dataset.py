@@ -130,14 +130,57 @@ class Dataset:
 
         # TODO: 计算仿射变换参数
 
-        # Ground true label data for CRNN
         labels = []
+        alline_matrixs = []
+        alline_pnts = []
         for gt in mlt_gts:
             ignore = gt[-1]
             if not ignore:
+                # Ground true label data for CRNN
                 labels.append(gt[-2])
 
-        return img, score_map, geo_map, labels
+                # 计算访射变换
+                M, pnts = self._get_affine_M(gt[0], cfg.TRAIN.SHARE_CONV_STRIDE, cfg.TRAIN.ROI_ROTATE_FIX_HEIGHT)
+                alline_matrixs.append(M)
+                alline_pnts.append(pnts)
+
+        return img, score_map, geo_map, alline_matrixs, alline_pnts, labels
+
+    def _get_affine_M(self, poly, stride=4, fix_height=8):
+        """
+        :param poly: [[x1,y1],[x2,y2],[x3,y3],[x4,y4]]
+        :param stride: share feature 最后输出的大小为原图的 1/4, 用来计算 gt rbox 映射到 feature map 层的坐标
+        :param fix_height: 论文中将 share feature 上对应的 gt 区域都访射变换到高度为8
+        :return:
+            M: 仿射变换矩阵, 2x3
+            pnt_affined: rotate box 在最后一层 feature map 上经过仿射变换后的坐标
+        """
+        rbox = get_min_area_rect(poly)
+
+        # 获得位于最后一层 feature map 上的坐标
+        rbox = rbox / stride
+
+        cx = (rbox[0][0] + rbox[3][1]) / 2
+        cy = (rbox[0][1] + rbox[3][1]) / 2
+        angle = rbox[8]
+
+        # TODO: Is this right??
+        # 最后一层 feature map 上 roi 的长宽
+        roi_w = int(np.linalg.norm(rbox[0] - rbox[1]))
+        roi_h = int(np.linalg.norm(rbox[2] - rbox[3]))
+
+        # 放大的倍数，e.g 放大 1.2 倍，放大 0.5 倍(即缩小2倍)
+        scale = fix_height / roi_h
+        # roi_scale_w = int(roi_w * scale)
+
+        # 返回 2 x 3 的矩阵
+        # TODO: 确认 dtype
+        M = cv2.getRotationMatrix2D((cx, cy), angle, scale)
+
+        # TODO: 确认 dtype
+        pnts_affined = cv2.transform(rbox, M)
+
+        return M, pnts_affined
 
     def _crop_img(self, img, mlt_gts):
         """
@@ -193,7 +236,7 @@ class Dataset:
             xy_in_poly = np.argwhere(poly_mask == (idx + 1))
 
             rbox = get_min_area_rect(poly)
-            # TODO: this is slow!!!
+            # TODO: this is slow!!! https://github.com/argman/EAST/issues/160
             for y, x in xy_in_poly:
                 point = np.array([x, y], dtype=np.float32)
                 # left-top -> right-top

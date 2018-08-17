@@ -29,7 +29,6 @@ def draw_bounding_box(img, line, color=(255, 0, 0)):
 def get_min_area_rect(line):
     """
     :param line: numpy array [[x1,y1],[x2,y2],[x3,y3],[x4,y4]]
-        矩形四点坐标的顺序： left-top, right-top, right-bottom, left-bottom
     :return [[x1,y1],[x2,y2],[x3,y3],[x4,y4], angle]
         矩形四点坐标的顺序： left-top, right-top, right-bottom, left-bottom
     """
