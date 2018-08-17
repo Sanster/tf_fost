@@ -1,16 +1,17 @@
+from scipy.spatial import distance as dist
 import cv2
 import numpy as np
 
 
 def draw_four_vectors(img, line, color=(0, 255, 0)):
     """
-    :param line: (x1,y1,x2,y2,x3,y3,x4,y4)
+    :param line: [[x1,y1],[x2,y2],[x3,y3],[x4,y4]]
         矩形四点坐标的顺序： left-top, right-top, right-bottom, left-bottom
     """
-    img = cv2.line(img, (line[0], line[1]), (line[2], line[3]), color)
-    img = cv2.line(img, (line[2], line[3]), (line[4], line[5]), color)
-    img = cv2.line(img, (line[4], line[5]), (line[6], line[7]), color)
-    img = cv2.line(img, (line[6], line[7]), (line[0], line[1]), color)
+    img = cv2.line(img, (line[0][0], line[0][1]), (line[1][0], line[1][1]), color)
+    img = cv2.line(img, (line[1][0], line[1][1]), (line[2][0], line[2][1]), color)
+    img = cv2.line(img, (line[2][0], line[2][1]), (line[3][0], line[3][1]), color)
+    img = cv2.line(img, (line[3][0], line[3][1]), (line[0][0], line[0][1]), color)
     return img
 
 
@@ -27,25 +28,63 @@ def draw_bounding_box(img, line, color=(255, 0, 0)):
 
 def get_min_area_rect(line):
     """
-    :param line: (x1,y1,x2,y2,x3,y3,x4,y4)
+    :param line: numpy array [[x1,y1],[x2,y2],[x3,y3],[x4,y4]]
         矩形四点坐标的顺序： left-top, right-top, right-bottom, left-bottom
-    :return  (x1,y1,x2,y2,x3,y3,x4,y4, angle)
+    :return [[x1,y1],[x2,y2],[x3,y3],[x4,y4], angle]
         矩形四点坐标的顺序： left-top, right-top, right-bottom, left-bottom
     """
-    rect = cv2.minAreaRect(np.asarray([[line[0], line[1]],
-                                       [line[2], line[3]],
-                                       [line[4], line[5]],
-                                       [line[6], line[7]]]))
+    rect = cv2.minAreaRect(line)
     angle = rect[2]
 
     # 获得最小 rotate rect 的四个角点
     box = cv2.boxPoints(rect)
+    box = clockwise_points(box)
+
     box = [
-        box[0][0], box[0][1],
-        box[1][0], box[1][1],
-        box[2][0], box[2][1],
-        box[3][0], box[3][1],
+        np.asarray([[box[0][0], box[0][1]],
+                    [box[1][0], box[1][1]],
+                    [box[2][0], box[2][1]],
+                    [box[3][0], box[3][1]]]).astype(np.int64),
         angle
     ]
 
     return box
+
+
+# https://www.pyimagesearch.com/2016/03/21/ordering-coordinates-clockwise-with-python-and-opencv/
+def clockwise_points(pnts):
+    """
+    sort clockwise
+    :param pnts: numpy array [[x1,y1],[x2,y2],[x3,y3],[x4,y4]]
+    :return: numpy array [[x1,y1],[x2,y2],[x3,y3],[x4,y4]]
+    """
+    # sort the points based on their x-coordinates
+    xSorted = pnts[np.argsort(pnts[:, 0]), :]
+
+    # grab the left-most and right-most points from the sorted
+    # x-roodinate points
+    leftMost = xSorted[:2, :]
+    rightMost = xSorted[2:, :]
+
+    # now, sort the left-most coordinates according to their
+    # y-coordinates so we can grab the top-left and bottom-left
+    # points, respectively
+    leftMost = leftMost[np.argsort(leftMost[:, 1]), :]
+    (tl, bl) = leftMost
+
+    # now that we have the top-left coordinate, use it as an
+    # anchor to calculate the Euclidean distance between the
+    # top-left and right-most points; by the Pythagorean
+    # theorem, the point with the largest distance will be
+    # our bottom-right point
+    D = dist.cdist(tl[np.newaxis], rightMost, "euclidean")[0]
+    (br, tr) = rightMost[np.argsort(D)[::-1], :]
+
+    # return the coordinates in top-left, top-right,
+    # bottom-right, and bottom-left order
+    return np.array([tl, tr, br, bl], dtype="float32")
+
+
+def point_dist_to_line(p1, p2, p3):
+    # compute the distance from p3 to p1-p2
+    return np.linalg.norm(np.cross(p2 - p1, p1 - p3)) / np.linalg.norm(p2 - p1)

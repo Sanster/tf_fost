@@ -3,6 +3,9 @@ import cv2
 
 from lib import cv2_utils
 
+MLT_IGNORE_TEXT = '###'
+MLT_IGNORE_LANGUAGES = ['None', 'Symbols']
+
 
 def get_ltrb(line):
     """
@@ -14,7 +17,7 @@ def get_ltrb(line):
     xmax = max(line[2], line[4])
     ymax = max(line[5], line[7])
 
-    return xmin, ymin, xmax, ymax
+    return np.asarray([xmin, ymin, xmax, ymax])
 
 
 def get_img_scale(img, scale, max_scale):
@@ -29,13 +32,13 @@ def get_img_scale(img, scale, max_scale):
     return im_scale
 
 
-def parse_line(pnts, im_scale=1):
+def parse_mlt_line(pnts, im_scale=1):
     """
     :param pnts:
         "x1,y1,x2,y2,x3,y3,x4,y4,language,text"
         矩形四点坐标的顺序： left-top, right-top, right-bottom, left-bottom
     :return:
-        (x1,y1,x2,y2,x3,y3,x4,y4), language, text
+        [[x1,y1],[x2,y2],[x3,y3],[x4,y4]], language, text
     """
     splited_line = pnts.split(',')
     if len(splited_line) > 10:
@@ -44,12 +47,36 @@ def parse_line(pnts, im_scale=1):
     for i in range(8):
         splited_line[i] = int(int(splited_line[i]) * im_scale)
 
-    pnts = (splited_line[0], splited_line[1],
-            splited_line[2], splited_line[3],
-            splited_line[4], splited_line[5],
-            splited_line[6], splited_line[7])
+    pnts = np.asarray([[splited_line[0], splited_line[1]],
+                       [splited_line[2], splited_line[3]],
+                       [splited_line[4], splited_line[5]],
+                       [splited_line[6], splited_line[7]]]).astype(np.float64)
 
     return pnts, splited_line[-2], splited_line[-1]
+
+
+def load_mlt_gt(gt_path):
+    """
+    :param gt_path:
+    :return: [
+            [[x1,y1],[x2,y2],[x3,y3],[x4,y4]],language,text,ignore],
+            ...
+        ]
+    """
+    with open(gt_path, 'r') as f:
+        lines = f.readlines()
+        lines = [line.strip() for line in lines]
+
+    parsed_lines = [parse_mlt_line(line) for line in lines]
+
+    out = []
+    for line in parsed_lines:
+        ignore = False
+        if line[1] in MLT_IGNORE_LANGUAGES or line[2] == MLT_IGNORE_TEXT:
+            ignore = True
+        out.append([line[0], line[1], line[2], ignore])
+
+    return out
 
 
 if __name__ == "__main__":
@@ -57,11 +84,14 @@ if __name__ == "__main__":
     gt_path = '/home/cwq/data/MLT2017/val_gt/gt_img_757.txt'
     fixed_height = 32
 
+    aa = load_mlt_gt(gt_path)
+    print(aa)
+
     with open(gt_path, 'r') as f:
         lines = f.readlines()
         lines = [line.strip() for line in lines]
 
-    parsed_lines = [parse_line(line) for line in lines]
+    parsed_lines = [parse_mlt_line(line) for line in lines]
     rboxs = [cv2_utils.get_min_area_rect(line[0]) for line in parsed_lines]
 
     img = cv2.imread(img_path)

@@ -1,4 +1,4 @@
-from libs.utils import load_chars
+from lib.utils import load_chars
 
 
 class LabelConverter:
