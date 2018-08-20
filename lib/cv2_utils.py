@@ -83,7 +83,3 @@ def clockwise_points(pnts):
     # bottom-right, and bottom-left order
     return np.array([tl, tr, br, bl], dtype="float32")
 
-
-def point_dist_to_line(p1, p2, p3):
-    # compute the distance from p3 to p1-p2
-    return np.linalg.norm(np.cross(p2 - p1, p1 - p3)) / np.linalg.norm(p2 - p1)

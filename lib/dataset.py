@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 
 from lib import cv2_utils
-from lib.cv2_utils import get_min_area_rect, point_dist_to_line
+from lib.cv2_utils import get_min_area_rect
 from lib.icdar_utils import load_mlt_gt, get_ltrb
 from lib.config import cfg
 
@@ -236,22 +236,8 @@ class Dataset:
             xy_in_poly = np.argwhere(poly_mask == (idx + 1))
 
             rbox = get_min_area_rect(poly)
-            # TODO: this is slow!!! https://github.com/argman/EAST/issues/160
-            for y, x in xy_in_poly:
-                point = np.array([x, y], dtype=np.float32)
-                # left-top -> right-top
-                geo_map[y, x, 0] = point_dist_to_line(rbox[0][0], rbox[0][1], point)
 
-                # right-top -> right-bottom
-                geo_map[y, x, 1] = point_dist_to_line(rbox[0][1], rbox[0][2], point)
-
-                # right-bottom -> left-bottom
-                geo_map[y, x, 2] = point_dist_to_line(rbox[0][2], rbox[0][3], point)
-
-                # left-bottom -> left-top
-                geo_map[y, x, 3] = point_dist_to_line(rbox[0][3], rbox[0][0], point)
-
-                geo_map[y, x, 4] = rbox[1]
+            self._calculate_gep_map(geo_map, xy_in_poly, rbox[0], rbox[1])
 
             # 可视化距离 map，越亮代表距离越远
             cv2.imwrite('geo_map_lt_rt.jpg', geo_map[::, ::, 0])
@@ -260,6 +246,39 @@ class Dataset:
             cv2.imwrite('geo_map_lb_lt.jpg', geo_map[::, ::, 3])
 
         return score_map, geo_map
+
+    # https://github.com/argman/EAST/issues/160
+    def _calculate_gep_map(self, geo_map, xy_in_poly, rectange, rotate_angle):
+        p0_rect, p1_rect, p2_rect, p3_rect = rectange
+        height = (self.point_dist_to_line(p0_rect, p1_rect, p2_rect) + self.point_dist_to_line(p0_rect, p1_rect,
+                                                                                               p3_rect)) / 2
+        width = (self.point_dist_to_line(p3_rect, p0_rect, p1_rect) + self.point_dist_to_line(p3_rect, p0_rect,
+                                                                                              p2_rect)) / 2
+
+        ys = xy_in_poly[:, 0]
+        xs = xy_in_poly[:, 1]
+        num_points = xy_in_poly.shape[0]
+        top_distance_tmp = self.point_dist_to_line(np.tile(p0_rect, (num_points, 1)),
+                                                   np.tile(p1_rect, (num_points, 1)),
+                                                   xy_in_poly[:, ::-1])
+        geo_map[ys, xs, 0] = top_distance_tmp
+        right_distance_tmp = self.point_dist_to_line(np.tile(p1_rect, (num_points, 1)),
+                                                     np.tile(p2_rect, (num_points, 1)),
+                                                     xy_in_poly[:, ::-1])
+        geo_map[ys, xs, 1] = right_distance_tmp
+        geo_map[ys, xs, 2] = height - top_distance_tmp
+        geo_map[ys, xs, 3] = width - right_distance_tmp
+        geo_map[ys, xs, 4] = rotate_angle
+        return geo_map
+
+    def point_dist_to_line(self, p1, p2, p3):
+        if len(p3.shape) < 2:
+            return np.linalg.norm(np.cross(p2 - p1, p1 - p3)) / np.linalg.norm(p2 - p1)
+        else:
+            points = p3.shape[0]
+            cross_product = np.cross(p2 - p1, p1 - p3)
+            cross_product = np.resize(cross_product, [points, 1])
+            return np.linalg.norm(cross_product, axis=1) / np.linalg.norm(p2 - p1, axis=1)
 
     def _sparse_tuple_from_label(self, sequences, default_val=-1, dtype=np.int32):
         """Create a sparse representention of x.
