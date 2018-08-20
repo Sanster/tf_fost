@@ -50,7 +50,7 @@ def parse_mlt_line(pnts, im_scale=1):
     pnts = np.asarray([[splited_line[0], splited_line[1]],
                        [splited_line[2], splited_line[3]],
                        [splited_line[4], splited_line[5]],
-                       [splited_line[6], splited_line[7]]]).astype(np.float64)
+                       [splited_line[6], splited_line[7]]]).astype(np.int32)
 
     return pnts, splited_line[-2], splited_line[-1]
 
@@ -88,47 +88,49 @@ def load_mlt_gt(gt_path, include_ignore=False):
 if __name__ == "__main__":
     img_path = '/home/cwq/data/MLT2017/val/img_757.jpg'
     gt_path = '/home/cwq/data/MLT2017/val_gt/gt_img_757.txt'
+
     fixed_height = 32
 
-    aa = load_mlt_gt(gt_path)
-    print(aa)
+    parsed_lines = load_mlt_gt(gt_path)
 
-    with open(gt_path, 'r') as f:
-        lines = f.readlines()
-        lines = [line.strip() for line in lines]
-
-    parsed_lines = [parse_mlt_line(line) for line in lines]
     rboxs = [cv2_utils.get_min_area_rect(line[0]) for line in parsed_lines]
 
     img = cv2.imread(img_path)
 
     for line in rboxs:
-        img = cv2_utils.draw_four_vectors(img, line[:8])
+        img = cv2_utils.draw_four_vectors(img, line[0])
 
     w = img.shape[1]
     h = img.shape[0]
 
+    ori_img = img.copy()
     for rbox in rboxs:
         print(rbox)
 
-        cx = (rbox[0] + rbox[4]) / 2
-        cy = (rbox[1] + rbox[5]) / 2
-        angle = rbox[8]
+        cy = int((rbox[0][0][1] + rbox[0][2][1]) / 2)
+        cx = int((rbox[0][0][0] + rbox[0][2][0]) / 2)
 
-        roi_w = int(abs(rbox[0] - rbox[6]))
-        roi_h = int(abs(rbox[1] - rbox[3]))
+        ori_img = cv2.circle(ori_img, (cx, cy), radius=5, color=(0, 0, 255))
 
-        scale = roi_h / fixed_height
-        roi_scale_w = int(roi_w / scale)
+        angle = rbox[1]
 
-        M = cv2.getRotationMatrix2D((cx, cy), angle, 1 / scale)
+        roi_w = int(np.linalg.norm(rbox[0][0] - rbox[0][1]))
+        roi_h = int(np.linalg.norm(rbox[0][1] - rbox[0][2]))
 
-        t = cv2.createAffineTransformer(True)
+        scale = fixed_height / roi_h
+        roi_scale_w = int(roi_w * scale)
 
-        scale_h = int(h / scale)
-        scale_w = int(w / scale)
+        M = cv2.getRotationMatrix2D((cx, cy), angle, scale)
 
-        affine_img = cv2.warpAffine(img, M, (scale_w, scale_h))
+        scale_h = int(h * scale)
+        scale_w = int(w * scale)
+
+        affine_img = cv2.warpAffine(img, M, (w, h))
+
+        # 在 warpAffine 后的图片上截取高度为 32 的区域
+        pnts_affined = cv2.transform(np.asarray([rbox[0]]), M)[0]
+        affine_img = cv2_utils.draw_four_vectors(affine_img, pnts_affined, color=(255, 0, 0))
+
         cv2.imshow('test', affine_img)
         cv2.waitKey()
 

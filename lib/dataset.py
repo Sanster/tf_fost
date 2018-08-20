@@ -53,7 +53,7 @@ class Dataset:
         return base_names
 
     def get_next_batch(self, sess):
-        imgs, score_maps, geo_maps, labels = sess.run(self.next_batch)
+        imgs, score_maps, geo_maps, alline_matrixs, alline_pnts, labels = sess.run(self.next_batch)
 
         sparse_labels = []
         for img_labels in labels:
@@ -62,7 +62,7 @@ class Dataset:
             encoded_labels = self.converter.encode_list(decoded_labels)
             sparse_labels.append(self._sparse_tuple_from_label(encoded_labels))
 
-        return imgs, score_maps, geo_maps, sparse_labels
+        return imgs, score_maps, geo_maps, alline_matrixs, alline_pnts, sparse_labels
 
     def _create_dataset(self, base_names):
         tf_base_names = tf.convert_to_tensor(base_names, dtype=dtypes.string)
@@ -73,7 +73,7 @@ class Dataset:
             d = d.shuffle(buffer_size=self.size)
 
         d = d.map(lambda base_name: tf.py_func(self._input_py_parser, [base_name],
-                                               [tf.uint8, tf.uint8, tf.float32, tf.string]))
+                                               [tf.uint8, tf.uint8, tf.float32, tf.float64, tf.float64, tf.string]))
 
         d = d.batch(self.batch_size)
         d = d.prefetch(buffer_size=2)
@@ -107,14 +107,16 @@ class Dataset:
         xscale = cfg.TRAIN.CROPED_IMG_SIZE / img.shape[1]
         yscale = cfg.TRAIN.CROPED_IMG_SIZE / img.shape[0]
 
-        img = cv2.resize(img, (cfg.TRAIN.CROPED_IMG_SIZE, cfg.TRAIN.CROPED_IMG_SIZE), interpolation=cv2.INTER_AREA)
-
         for gt in mlt_gts:
             # print(gt[0])
             # print(gt[0].dtype)
-            gt[0][:, 0] *= xscale
-            gt[0][:, 1] *= yscale
-            gt[0] = gt[0].astype(np.int32)
+            gt[0][:, 0] = (gt[0][:, 0] * xscale).astype(np.int32)
+            gt[0][:, 1] = (gt[0][:, 1] * yscale).astype(np.int32)
+            # gt[0][:, 1] *= yscale
+            # gt[0] = gt[0].astype(np.int32)
+
+        # TODO: Use random crop
+        img = cv2.resize(img, (cfg.TRAIN.CROPED_IMG_SIZE, cfg.TRAIN.CROPED_IMG_SIZE), interpolation=cv2.INTER_AREA)
 
         # for gt in mlt_gts:
         #     gt[0] = gt[0].astype(np.int32)
@@ -152,33 +154,52 @@ class Dataset:
         :param stride: share feature 最后输出的大小为原图的 1/4, 用来计算 gt rbox 映射到 feature map 层的坐标
         :param fix_height: 论文中将 share feature 上对应的 gt 区域都访射变换到高度为8
         :return:
-            M: 仿射变换矩阵, 2x3
-            pnt_affined: rotate box 在最后一层 feature map 上经过仿射变换后的坐标
+            M: 仿射变换矩阵, 3x3 , float64
+            pnt_affined: rotate box 在最后一层 feature map 上经过仿射变换后的坐标, float64
         """
         rbox = get_min_area_rect(poly)
 
-        # 获得位于最后一层 feature map 上的坐标
-        rbox = rbox / stride
+        # 最后一层 feature map 上的坐标按照 stride 缩小
+        rbox[0] = rbox[0] / stride
 
-        cx = (rbox[0][0] + rbox[3][1]) / 2
-        cy = (rbox[0][1] + rbox[3][1]) / 2
-        angle = rbox[8]
+        cx = (rbox[0][0][0] + rbox[0][2][0]) / 2
+        cy = (rbox[0][0][1] + rbox[0][2][1]) / 2
+        angle = rbox[1]
 
         # TODO: Is this right??
         # 最后一层 feature map 上 roi 的长宽
-        roi_w = int(np.linalg.norm(rbox[0] - rbox[1]))
-        roi_h = int(np.linalg.norm(rbox[2] - rbox[3]))
+        roi_w = int(np.linalg.norm(rbox[0][0] - rbox[0][1]))
+        roi_h = int(np.linalg.norm(rbox[0][1] - rbox[0][2]))
 
         # 放大的倍数，e.g 放大 1.2 倍，放大 0.5 倍(即缩小2倍)
         scale = fix_height / roi_h
         # roi_scale_w = int(roi_w * scale)
 
-        # 返回 2 x 3 的矩阵
-        # TODO: 确认 dtype
+        # 返回 2 x 3 的矩阵, float64
         M = cv2.getRotationMatrix2D((cx, cy), angle, scale)
 
-        # TODO: 确认 dtype
-        pnts_affined = cv2.transform(rbox, M)
+        # (4,2) float64
+        pnts_affined = cv2.transform(np.asarray([rbox[0]]), M)[0]
+        # print(pnts_affined.shape)
+
+        # Debug: check whether cv2.transform works right
+        # src = rbox[0][:3]
+        # dst = pnts_affined[0][:3]
+        # _M = cv2.getAffineTransform(src.astype(np.float32), dst.astype(np.float32))
+        # print("MMMMMMMMMM")
+        # print(M)
+        # print("__________")
+        # print(_M)
+
+        # print("Before stack")
+        # print(M.shape)
+        # print(M)
+        # Tensorflow matrices_to_flat_transforms need 3x3
+        # https://www.tensorflow.org/api_docs/python/tf/contrib/image/matrices_to_flat_transforms
+        M = np.vstack([M, [0, 0, 1]])
+        # print("After stack")
+        # print(M.shape)
+        # print(M)
 
         return M, pnts_affined
 
