@@ -19,6 +19,7 @@ from parse_args import parse_args
 from lib.config import load_config
 
 
+# noinspection PyAttributeOutsideInit
 class Trainer(object):
     def __init__(self, args):
         self.args = args
@@ -46,7 +47,8 @@ class Trainer(object):
             self.test_ds = Dataset(self.cfg, args.test_dir, args.test_gt_dir,
                                    self.converter, shuffle=False, batch_size=1)
 
-        self.model = ResNetV2()
+        self.model = ResNetV2(self.cfg, self.converter.num_classes)
+        self.model.create_architecture()
         self.sess = tf.Session(config=tf.ConfigProto(allow_soft_placement=True))
 
         self.epoch_start_index = 0
@@ -58,8 +60,8 @@ class Trainer(object):
         self.saver = tf.train.Saver(tf.global_variables(), max_to_keep=8)
         self.train_writer = tf.summary.FileWriter(self.args.log_dir, self.sess.graph)
 
-        if self.args.restore:
-            self._restore()
+        # if self.args.restore:
+        #     self._restore()
 
         print('Begin training...')
         for epoch in range(self.epoch_start_index, self.cfg.epochs):
@@ -67,77 +69,94 @@ class Trainer(object):
 
             for batch in range(self.batch_start_index, self.tr_ds.num_batches):
                 batch_start_time = time.time()
+                total_cost, detect_loss, reco_loss, global_step, lr = self._train()
 
-                if batch != 0 and (batch % self.args.log_step == 0):
-                    batch_cost, global_step, lr = self._train_with_summary()
-                else:
-                    batch_cost, global_step, lr = self._train()
+                # if batch != 0 and (batch % self.args.log_step == 0):
+                #     batch_cost, global_step, lr = self._train_with_summary()
+                # else:
+                #     batch_cost, global_step, lr = self._train()
 
-                print("epoch: {}, batch: {}/{}, step: {}, time: {:.02f}s, loss: {:.05}, lr: {:.05}"
-                      .format(epoch, batch, self.tr_ds.num_batches, global_step, time.time() - batch_start_time,
-                              batch_cost, lr))
+                print("{:.02f}s, epoch: {}, batch: {}/{}, "
+                      "total_loss: {:.03}, detect_loss: {:.03}, reco_loss: {:.03},  lr: {:.05}"
+                      .format(time.time() - batch_start_time, epoch, batch, self.tr_ds.num_batches,
+                              total_cost, detect_loss, reco_loss, lr))
 
-                if global_step != 0 and (global_step % self.args.val_step == 0):
-                    val_acc = self._do_val(self.val_ds, epoch, global_step, "val")
-                    test_acc = self._do_val(self.test_ds, epoch, global_step, "test")
-                    self._save_checkpoint(self.args.ckpt_dir, global_step, val_acc, test_acc)
+                # if global_step != 0 and (global_step % self.args.val_step == 0):
+                #     val_acc = self._do_val(self.val_ds, epoch, global_step, "val")
+                #     test_acc = self._do_val(self.test_ds, epoch, global_step, "test")
+                #     self._save_checkpoint(self.args.ckpt_dir, global_step, val_acc, test_acc)
 
             self.batch_start_index = 0
 
-    def _restore(self):
-        utils.restore_ckpt(self.sess, self.saver, self.args.ckpt_dir)
-
-        step_restored = self.sess.run(self.model.global_step)
-
-        self.epoch_start_index = math.floor(step_restored / self.tr_ds.num_batches)
-        self.batch_start_index = step_restored % self.tr_ds.num_batches
-
-        print("Restored global step: %d" % step_restored)
-        print("Restored epoch: %d" % self.epoch_start_index)
-        print("Restored batch_start_index: %d" % self.batch_start_index)
+    # def _restore(self):
+    #     utils.restore_ckpt(self.sess, self.saver, self.args.ckpt_dir)
+    #
+    #     step_restored = self.sess.run(self.model.global_step)
+    #
+    #     self.epoch_start_index = math.floor(step_restored / self.tr_ds.num_batches)
+    #     self.batch_start_index = step_restored % self.tr_ds.num_batches
+    #
+    #     print("Restored global step: %d" % step_restored)
+    #     print("Restored epoch: %d" % self.epoch_start_index)
+    #     print("Restored batch_start_index: %d" % self.batch_start_index)
 
     def _train(self):
-        img_batch, label_batch, labels, _ = self.tr_ds.get_next_batch(self.sess)
-        feed = {self.model.inputs: img_batch,
-                self.model.labels: label_batch,
-                self.model.is_training: True}
+        imgs, score_maps, geo_maps, affine_matrixs, affine_rects, labels = self.tr_ds.get_next_batch(self.sess)
+        # print(imgs.shape)
+        # print(score_maps.shape)
+        # print(geo_maps.shape)
+        # print(affine_matrixs.shape)
+        # print(affine_rects.shape)
+        # print(labels[0].shape)
 
-        fetches = [self.model.total_loss,
-                   self.model.ctc_loss,
-                   self.model.regularization_loss,
-                   self.model.global_step,
-                   self.model.lr,
-                   self.model.train_op]
+        fetches = [
+            self.model.total_loss,
+            self.model.detect_loss,
+            # self.model.reco_ctc_loss,
+            self.model.global_step,
+            self.model.lr,
+            self.model.train_op
+        ]
 
-        batch_cost, _, _, global_step, lr, _ = self.sess.run(fetches, feed)
-        return batch_cost, global_step, lr
+        feed = {
+            self.model.input_images: imgs,
+            self.model.input_score_maps: score_maps,
+            self.model.input_geo_maps: geo_maps,
+            self.model.input_affine_matrixs: affine_matrixs,
+            self.model.input_affine_rects: affine_rects,
+            # self.model.input_labels: labels,
+            self.model.is_training: True
+        }
 
-    def _train_with_summary(self):
-        img_batch, label_batch, labels, _ = self.tr_ds.get_next_batch(self.sess)
-        feed = {self.model.inputs: img_batch,
-                self.model.labels: label_batch,
-                self.model.is_training: True}
+        total_loss, detect_loss, global_step, lr, _ = self.sess.run(fetches, feed)
+        return total_loss, detect_loss, 1.0, global_step, lr
 
-        fetches = [self.model.total_loss,
-                   self.model.ctc_loss,
-                   self.model.regularization_loss,
-                   self.model.global_step,
-                   self.model.lr,
-                   self.model.merged_summay,
-                   self.model.dense_decoded,
-                   self.model.edit_distance,
-                   self.model.train_op]
-
-        batch_cost, _, _, global_step, lr, summary, predicts, edit_distance, _ = self.sess.run(fetches, feed)
-        self.train_writer.add_summary(summary, global_step)
-
-        predicts = [self.converter.decode(p, CRNN.CTC_INVALID_INDEX) for p in predicts]
-        accuracy, _ = infer.calculate_accuracy(predicts, labels)
-
-        tf_utils.add_scalar_summary(self.train_writer, "train_accuracy", accuracy, global_step)
-        tf_utils.add_scalar_summary(self.train_writer, "train_edit_distance", edit_distance, global_step)
-
-        return batch_cost, global_step, lr
+    # def _train_with_summary(self):
+    #     img_batch, label_batch, labels, _ = self.tr_ds.get_next_batch(self.sess)
+    #     feed = {self.model.inputs: img_batch,
+    #             self.model.labels: label_batch,
+    #             self.model.is_training: True}
+    #
+    #     fetches = [self.model.total_loss,
+    #                self.model.ctc_loss,
+    #                self.model.regularization_loss,
+    #                self.model.global_step,
+    #                self.model.lr,
+    #                self.model.merged_summay,
+    #                self.model.dense_decoded,
+    #                self.model.edit_distance,
+    #                self.model.train_op]
+    #
+    #     batch_cost, _, _, global_step, lr, summary, predicts, edit_distance, _ = self.sess.run(fetches, feed)
+    #     self.train_writer.add_summary(summary, global_step)
+    #
+    #     predicts = [self.converter.decode(p, CRNN.CTC_INVALID_INDEX) for p in predicts]
+    #     accuracy, _ = infer.calculate_accuracy(predicts, labels)
+    #
+    #     tf_utils.add_scalar_summary(self.train_writer, "train_accuracy", accuracy, global_step)
+    #     tf_utils.add_scalar_summary(self.train_writer, "train_edit_distance", edit_distance, global_step)
+    #
+    #     return batch_cost, global_step, lr
 
     # def _do_val(self, dataset, epoch, step, name):
     #     if dataset is None:

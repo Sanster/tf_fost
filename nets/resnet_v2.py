@@ -218,7 +218,7 @@ def resnet_v2_block(scope, base_depth, num_units, stride):
       stride: The stride of the block, implemented as a stride in the last unit.
         All other units have stride=1.
     Returns:
-      A resnet_v2 bottleneck block.
+      A resnet_v2 bottleneck blockresnet_arg_scope.
     """
     return resnet_utils.Block(scope, bottleneck, [{
         'depth': base_depth * 4,
@@ -277,15 +277,20 @@ class ResNetV2(Network):
 if __name__ == '__main__':
     import sys
 
-    sys.path.insert(0, '../lib')
-    from tf_utils import print_endpoints
+    from lib.tf_utils import print_endpoints
+    from lib.config import load_config
 
-    img_file = '/home/cwq/data/VOCdevkit2007/VOC2007/JPEGImages/icdar13_100.jpg'
+    cfg = load_config()
+
+    img_file = '/home/cwq/data/MLT2017/val/img_773.jpg'
     # img_file = '/home/cwq/ssd_data/more_bg_corpus/val/00000000.jpg'
 
-    res_net = ResNetV2()
+    cfg.lr_boundaries = [1]
+    cfg.lr_values = [1, 2]
+
+    res_net = ResNetV2(cfg, 62)
     res_net.create_architecture()
     print_endpoints(res_net, img_file)
-    # for k, v in res_net.end_points.items():
-    #     stride = int(800/v.shape.as_list()[2])
-    #     print("%s, stride %d, shape %s" % (k, stride, v.shape.as_list()))
+    for k, v in res_net.end_points.items():
+        stride = int(641/v.shape.as_list()[2])
+        print("%s, stride %d, shape %s" % (k, stride, v.shape.as_list()))

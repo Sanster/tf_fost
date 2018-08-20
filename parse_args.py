@@ -35,15 +35,16 @@ def parse_args(infer=False):
     parser.add_argument('--log_dir', default='./output/log', help='Directory to save tensorboard logs')
     parser.add_argument('--result_dir', default='./output/result', help='Directory to save val/test result')
 
-    parser.add_argument('--chars_file', default='./data/chars/chn.txt', help='Chars file to load')
+    parser.add_argument('--chars_file', default='./data/chars/eng.txt')
 
     parser.add_argument('--val_step', type=int, default=2000, help='Steps to do val.test and save checkpoint')
     parser.add_argument('--log_step', type=int, default=30, help='Steps save tensorflow summary')
 
-    parser.add_argument('--train_dir', default='', help='Directory store training images and labels')
+    parser.add_argument('--train_dir', default='/home/cwq/data/MLT2017/val')
+    parser.add_argument('--train_gt_dir', default='/home/cwq/data/MLT2017/val_gt')
     parser.add_argument('--val_dir', default=None, help='Directory store validation images and labels')
     parser.add_argument('--test_dir', default=None, help='Directory store test images and labels')
-    parser.add_argument('--cfg_name', default='raw', help="raw / squeeze/ dense / resnet / simple")
+    parser.add_argument('--cfg_name', default='default')
 
     # Only for inference
     parser.add_argument('--infer_dir', default='./data/demo', help='Directory store infer images and labels')

@@ -35,7 +35,8 @@ class Network(object):
         raise NotImplementedError
 
     def create_architecture(self):
-        self.input_images = tf.placeholder(tf.float32, shape=[None, None, None, 3], name='input_images')
+        # ResNetV2 要求的, 需要 + 1
+        self.input_images = tf.placeholder(tf.float32, shape=[None, 641, 641, 3], name='input_images')
         self.input_score_maps = tf.placeholder(tf.float32, shape=[None, None, None, 1], name='input_score_maps')
         self.input_geo_maps = tf.placeholder(tf.float32, shape=[None, None, None, 5], name='input_geo_maps')
 
@@ -44,7 +45,7 @@ class Network(object):
         # [batch_size,num_of_text_roi,4]
         self.input_affine_rects = tf.placeholder(tf.float64, shape=[None, None, 4], name='input_affine_pnts')
 
-        self.input_labels = tf.sparse_placeholder(tf.int32, name='text_labels')
+        # self.input_labels = tf.sparse_placeholder(tf.int32, name='text_labels')
         self.is_training = tf.placeholder(tf.bool, name="is_training")
 
         self._build_network()
@@ -56,40 +57,53 @@ class Network(object):
     def _build_network(self):
         # stride 4, channels 320
         self.shared_conv = self._build_share_conv()
+        print("Shared conv shape")
+        print(self.shared_conv)
 
         self.F_score, self.F_geometry = self._build_detect_output(self.shared_conv)
 
-        rois, rois_width = self._roi_rotate_layer(self.shared_conv, self.input_affine_matrixs, self.input_affine_rects,
-                                                  self.cfg.train.roi_rotate_fix_height)
-
-        self.seq_len = rois_width
-
-        self.reco_logits = self._build_reco_output(rois, self.seq_len, self.num_classes)
+        # rois, rois_width = self._roi_rotate_layer(self.shared_conv, self.input_affine_matrixs, self.input_affine_rects,
+        #                                           self.cfg.train.roi_rotate_fix_height)
+        #
+        # self.seq_len = rois_width
+        #
+        # self.reco_logits = self._build_reco_output(rois, self.seq_len, self.num_classes)
 
     def _build_losses(self):
         self.detect_loss = self._build_detect_loss(self.input_score_maps, self.F_score,
                                                    self.input_geo_maps, self.F_geometry)
 
-        self.reco_ctc_loss = self._build_reco_loss(self.reco_logits, self.input_labels, self.seq_len)
+        # self.reco_ctc_loss = self._build_reco_loss(self.reco_logits, self.input_labels, self.seq_len)
 
         self.regularization_loss = tf.add_n(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
-        self.total_loss = self.detect_loss + self.reco_ctc_loss + self.regularization_loss
+        # self.total_loss = self.detect_loss + self.reco_ctc_loss + self.regularization_loss
+        self.total_loss = self.detect_loss + self.regularization_loss
 
-        tf.summary.scalar('detect_loss', self.detect_loss)
-        tf.summary.scalar('reco_ctc_loss', self.reco_ctc_loss)
-        tf.summary.scalar('regularization_loss', self.regularization_loss)
-        tf.summary.scalar('total_loss', self.total_loss)
+        # tf.summary.scalar('detect_loss', self.detect_loss)
+        # tf.summary.scalar('reco_ctc_loss', self.reco_ctc_loss)
+        # tf.summary.scalar('regularization_loss', self.regularization_loss)
+        # tf.summary.scalar('total_loss', self.total_loss)
 
     def _build_detect_output(self, shared_conv):
         F_score = slim.conv2d(shared_conv, 1, 1, activation_fn=tf.nn.sigmoid, normalizer_fn=None)
+        print("F_score shape")
+        print(F_score)
 
         # 4 channel of axis aligned bbox and 1 channel rotation angle
         # TODO: why x 512?
+        # geo_map = slim.conv2d(shared_conv, 4, 1, activation_fn=tf.nn.sigmoid,
+        #                       normalizer_fn=None) * 512
+
         geo_map = slim.conv2d(shared_conv, 4, 1, activation_fn=tf.nn.sigmoid,
-                              normalizer_fn=None) * 512
+                              normalizer_fn=None)
+        print("geo_map shape")
+        print(geo_map)
+
         # angle is between [-45, 45]
         angle_map = (slim.conv2d(shared_conv, 1, 1, activation_fn=tf.nn.sigmoid,
                                  normalizer_fn=None) - 0.5) * np.pi / 2
+        print("angle_map shape")
+        print(angle_map)
 
         F_geometry = tf.concat([geo_map, angle_map], axis=-1)
 
@@ -223,53 +237,53 @@ class Network(object):
 
             # stride 32, channels 2048
             stride_32_conv = self.end_points['resnet_v2_50/block4']
+            print(stride_32_conv.shape.as_list())
 
             with tf.variable_scope('deconv_1'):
-                # stride 16, channel 64
-                deconv_block1 = self._deconv(stride_32_conv, 128, 128)
-                # stride 16, channel 256 + 64 = 320
-                concat_deconv_block1 = tf.concat((deconv_block1, stride_16_conv), 3)
-
+                # stride 16, out channel 256 + 64 = 320
+                deconv_block1 = self._deconv(stride_32_conv, stride_16_conv, 128, 128)
                 print(deconv_block1)
-                print(concat_deconv_block1)
 
             with tf.variable_scope('deconv_2'):
-                # stride 8, channel 128
-                deconv_block2 = self._deconv(concat_deconv_block1, 64, 64)
                 # stride 8, channel 128 + 128 = 256
-                concat_deconv_block2 = tf.concat((deconv_block2, stride_8_conv), 3)
-
+                deconv_block2 = self._deconv(deconv_block1, stride_8_conv, 64, 64)
                 print(deconv_block2)
-                print(concat_deconv_block2)
 
             with tf.variable_scope('deconv_3'):
-                # stride 4, channel 128
-                deconv_block3 = self._deconv(concat_deconv_block2, 32, 32)
                 # stride 4, channel 256 + 64 = 320
-                concat_deconv_block3 = tf.concat((deconv_block3, stride_4_conv), 3)
+                deconv_block3 = self._deconv(deconv_block2, stride_4_conv, 32, 32, last_layer=True)
                 print(deconv_block3)
-                print(concat_deconv_block3)
 
-        return concat_deconv_block3
+        return deconv_block3
 
-    def _deconv(self, input, conv_channels, out_channels):
+    def _deconv(self, input, conv_to_concat, conv_channels, dconv_channels, last_layer=False):
         deconv = slim.conv2d(input, conv_channels, 1, 1, 'SAME', scope='conv_1x1')
-        print(deconv)
         deconv = slim.conv2d(deconv, conv_channels, 3, 1, 'SAME', scope='conv_3x3')
+
         print(deconv)
-        deconv = self._upsample_layer(deconv, out_channels)
+        deconv = self._upsample_layer(deconv, dconv_channels, last_layer)
+        print(deconv)
+        deconv = self._crop_and_concat(deconv, conv_to_concat)
+
+        deconv.set_shape([None, None, None, dconv_channels + conv_to_concat.shape.as_list()[3]])
+
+        deconv = tf.nn.relu(deconv)
         return deconv
 
-    def _upsample_layer(self, input, out_channels, name='upsample', ksize=3, stride=2):
+    def _upsample_layer(self, input, out_channels, last_layer, name='upsample', ksize=3, stride=2):
         """
         对 Feature map 进行上采样， 放大 input shape 的两倍
         """
         with tf.variable_scope(name):
             in_shape = tf.shape(input)
 
-            h = ((in_shape[1] - 1) * stride) + 1
-            w = ((in_shape[2] - 1) * stride) + 1
-            output_shape = tf.stack([in_shape[0], h, w, out_channels])
+            # h = ((in_shape[1] - 1) * stride) + 1
+            # w = ((in_shape[2] - 1) * stride) + 1
+            # output_shape = tf.stack([in_shape[0], h, w, out_channels])
+            # if last_layer:
+            #     output_shape = tf.stack([in_shape[0], in_shape[1] * 2 - 1, in_shape[2] * 2 - 1, out_channels])
+            # else:
+            output_shape = tf.stack([in_shape[0], in_shape[1] * 2, in_shape[2] * 2, out_channels])
 
             static_in_shape = input.shape.as_list()
             filter_shape = [ksize, ksize, out_channels, static_in_shape[3]]
@@ -283,6 +297,19 @@ class Network(object):
 
             # upsample.set_shape((None, static_in_shape[1] * 2, static_in_shape[2] * 2, out_channels))
             return upsample
+
+    def _crop_and_concat(self, x1, x2):
+        """
+        x2 的长宽要大于 x1
+        """
+        with tf.name_scope("crop_and_concat"):
+            x1_shape = tf.shape(x1)
+            x2_shape = tf.shape(x2)
+            # offsets for the top left corner of the crop
+            offsets = [0, (x1_shape[1] - x2_shape[1]) // 2, (x1_shape[2] - x2_shape[2]) // 2, 0]
+            size = [-1, x2_shape[1], x2_shape[2], x1_shape[3]]
+            x1_crop = tf.slice(x1, offsets, size)
+            return tf.concat([x1_crop, x2], 3)
 
     def _get_deconv_filter(self, filter_shape):
         width = filter_shape[0]
@@ -399,28 +426,3 @@ class Network(object):
                                   sequence_length=seq_len)
         ctc_loss = tf.reduce_mean(ctc_loss)
         return ctc_loss
-
-# def train_step(self, sess, blobs, train_op):
-#     feed_dict = {self._image: blobs['data'], self._im_info: blobs['im_info'],
-#                  self._gt_boxes: blobs['gt_boxes']}
-#     rpn_loss_cls, rpn_loss_box, rpn_loss, total_loss, _ = sess.run(
-#         [self._losses["rpn_cross_entropy"],
-#          self._losses['rpn_loss_box'],
-#          self._losses['rpn_loss'],
-#          self._losses['total_loss'],
-#          train_op],
-#         feed_dict=feed_dict)
-#
-#     return rpn_loss_cls, rpn_loss_box, rpn_loss, total_loss, _
-#
-# def train_step_with_summary(self, sess, blobs, train_op):
-#     feed_dict = {self._image: blobs['data'], self._im_info: blobs['im_info'],
-#                  self._gt_boxes: blobs['gt_boxes']}
-#     rpn_loss_cls, rpn_loss_box, rpn_loss, loss, summary, _ = sess.run([self._losses["rpn_cross_entropy"],
-#                                                                        self._losses['rpn_loss_box'],
-#                                                                        self._losses['rpn_loss'],
-#                                                                        self._losses['total_loss'],
-#                                                                        self._summary_op,
-#                                                                        train_op],
-#                                                                       feed_dict=feed_dict)
-#     return rpn_loss_cls, rpn_loss_box, rpn_loss, loss, summary

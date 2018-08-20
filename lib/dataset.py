@@ -14,6 +14,8 @@ from lib.icdar_utils import load_mlt_gt, get_ltrb, get_ltrb_by4vec
 # noinspection PyMethodMayBeStatic
 from lib.label_converter import LabelConverter
 
+DEBUG = False
+
 
 class Dataset:
     """
@@ -41,12 +43,11 @@ class Dataset:
         self.size = len(self.base_names)
         self.num_batches = math.ceil(self.size / self.batch_size)
 
-        dataset = self._create_dataset(self.base_names)
+        dataset = self._create_dataset()
 
-        iterator = tf.data.Iterator.from_structure(dataset.output_types, dataset.output_shapes)
-
+        iterator = dataset.make_initializable_iterator()
         self.next_batch = iterator.get_next()
-        self.init_op = iterator.make_initializer(dataset)
+        self.init_op = iterator.initializer
 
     def _get_base_name(self, img_dir):
         img_paths = glob.glob(img_dir + '/*.*')
@@ -59,22 +60,25 @@ class Dataset:
         sparse_labels = []
         for img_labels in labels:
             decoded_labels = [l.decode() for l in img_labels]
-            print(decoded_labels)
+            # print(decoded_labels)
             encoded_labels = self.converter.encode_list(decoded_labels)
             sparse_labels.append(self._sparse_tuple_from_label(encoded_labels))
 
         return imgs, score_maps, geo_maps, affine_matrixs, affine_rects, sparse_labels
 
-    def _create_dataset(self, base_names):
-        tf_base_names = tf.convert_to_tensor(base_names, dtype=dtypes.string)
-
+    def _create_dataset(self):
+        tf_base_names = tf.convert_to_tensor(self.base_names, dtype=dtypes.string)
         d = tf.data.Dataset.from_tensor_slices(tf_base_names)
+        # d = tf.data.Dataset.from_generator(self._input_py_parser,
+        #                                    output_types=(
+        #                                        tf.uint8, tf.uint8, tf.float32, tf.float64, tf.int32,
+        #                                        tf.string))
 
         if self.shuffle:
             d = d.shuffle(buffer_size=self.size)
 
         d = d.map(lambda base_name: tf.py_func(self._input_py_parser, [base_name],
-                                               [tf.uint8, tf.uint8, tf.float32, tf.float64, tf.int32, tf.string]))
+                                               [tf.uint8, tf.float32, tf.float32, tf.float64, tf.int32, tf.string]))
 
         d = d.batch(self.batch_size)
         d = d.prefetch(buffer_size=2)
@@ -92,7 +96,9 @@ class Dataset:
         gt_name = 'gt_%s.txt' % base_name.split('.')[0]
         img_path = os.path.join(self.img_dir, base_name)
         gt_path = os.path.join(self.gt_dir, gt_name)
-        print(img_path)
+
+        if DEBUG:
+            print(img_path)
 
         mlt_gts = load_mlt_gt(gt_path)
 
@@ -109,35 +115,38 @@ class Dataset:
         yscale = self.cfg.train.croped_img_size / img.shape[0]
 
         for gt in mlt_gts:
-            # print(gt[0])
-            # print(gt[0].dtype)
+            # scale
             gt[0][:, 0] = (gt[0][:, 0] * xscale).astype(np.int32)
             gt[0][:, 1] = (gt[0][:, 1] * yscale).astype(np.int32)
-            # gt[0][:, 1] *= yscale
-            # gt[0] = gt[0].astype(np.int32)
+
+            # ignore small height text
+            rbox = get_min_area_rect(gt[0])
+            roi_h = int(np.linalg.norm(rbox[0][1] - rbox[0][2]))
+            if roi_h < self.cfg.min_text_height:
+                gt[-1] = True
 
         # TODO: Use random crop
         img = cv2.resize(img, (self.cfg.train.croped_img_size, self.cfg.train.croped_img_size),
                          interpolation=cv2.INTER_AREA)
-
-        # for gt in mlt_gts:
-        #     gt[0] = gt[0].astype(np.int32)
-        #     img = cv2_utils.draw_four_vectors(img, gt[0])
-        # cv2.imwrite('test.jpg', img)
 
         # if min(img.shape[0], img.shape[1]) < self.cfg.train.croped_img_size:
         #     img_croped = img
         # else:
         #     img_croped, mlt_gts = self._crop_img(img, mlt_gts)
 
+        if DEBUG:
+            for gt in mlt_gts:
+                gt[0] = gt[0].astype(np.int32)
+                img = cv2_utils.draw_four_vectors(img, gt[0])
+            bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+            cv2.imwrite('test.jpg', bgr)
+
         score_map, geo_map = self.generate_rbox(img.shape, mlt_gts)
 
         labels = []
         affine_matrixs = []
-        affine_pnts = []
+        affine_rects = []
         for gt in mlt_gts:
-            _matrixs = []
-            _pnts = []
             ignore = gt[-1]
             if not ignore:
                 # Ground true label data for CRNN
@@ -146,12 +155,15 @@ class Dataset:
                 # 计算访射变换
                 M, pnts = self._get_affine_M(gt[0], self.cfg.train.share_conv_stride,
                                              self.cfg.train.roi_rotate_fix_height)
-                _matrixs.append(M)
-                _pnts.append(pnts)
-            affine_matrixs.append(_matrixs)
-            affine_pnts.append(_pnts)
+                # print(M.shape)
+                affine_matrixs.append(M)
+                affine_rects.append(pnts)
 
-        return img, score_map, geo_map, affine_matrixs, affine_pnts, labels
+        affine_matrixs = np.asarray(affine_matrixs)
+        affine_rects = np.asarray(affine_rects)
+        # print(affine_matrixs.shape)
+        # print(affine_rects.shape)
+        return img, score_map, geo_map, affine_matrixs, affine_rects, labels
 
     def _get_affine_M(self, poly, stride=4, fix_height=8):
         """
@@ -233,7 +245,8 @@ class Dataset:
             if not ignore:
                 corner_map[bbox[1]:bbox[3], bbox[0]: bbox[2]] = 0
 
-        cv2.imwrite('test.jpg', corner_map * 255)
+        if DEBUG:
+            cv2.imwrite('test.jpg', corner_map * 255)
 
         return img, mlt_gts
 
@@ -262,25 +275,35 @@ class Dataset:
 
             cv2.fillPoly(score_map, [poly], 1)
 
-            cv2.imwrite('score_map.jpg', score_map * 255)
+            if DEBUG:
+                cv2.imwrite('score_map.jpg', score_map * 255)
 
             cv2.fillPoly(poly_mask, [poly], idx + 1)
             xy_in_poly = np.argwhere(poly_mask == (idx + 1))
 
             rbox = get_min_area_rect(poly)
 
-            self._calculate_gep_map(geo_map, xy_in_poly, rbox[0], rbox[1])
+            self._calculate_geo_map(geo_map, xy_in_poly, rbox[0], rbox[1])
 
             # 可视化距离 map，越亮代表距离越远
-            cv2.imwrite('geo_map_lt_rt.jpg', geo_map[::, ::, 0])
-            cv2.imwrite('geo_map_rt_rb.jpg', geo_map[::, ::, 1])
-            cv2.imwrite('geo_map_rb_lb.jpg', geo_map[::, ::, 2])
-            cv2.imwrite('geo_map_lb_lt.jpg', geo_map[::, ::, 3])
+            if DEBUG:
+                cv2.imwrite('geo_map_lt_rt.jpg', geo_map[::, ::, 0])
+                cv2.imwrite('geo_map_rt_rb.jpg', geo_map[::, ::, 1])
+                cv2.imwrite('geo_map_rb_lb.jpg', geo_map[::, ::, 2])
+                cv2.imwrite('geo_map_lb_lt.jpg', geo_map[::, ::, 3])
+
+        # TODO: why this is right?
+        score_map = score_map[::4, ::4, np.newaxis].astype(np.float32)
+        geo_map = geo_map[::4, ::4, :].astype(np.float32)
+
+        # TODO: rewrite this
+        score_map = score_map[:160, :160, :]
+        geo_map = geo_map[:160, :160, :]
 
         return score_map, geo_map
 
     # https://github.com/argman/EAST/issues/160
-    def _calculate_gep_map(self, geo_map, xy_in_poly, rectange, rotate_angle):
+    def _calculate_geo_map(self, geo_map, xy_in_poly, rectange, rotate_angle):
         p0_rect, p1_rect, p2_rect, p3_rect = rectange
         height = (self.point_dist_to_line(p0_rect, p1_rect, p2_rect) + self.point_dist_to_line(p0_rect, p1_rect,
                                                                                                p3_rect)) / 2
@@ -356,23 +379,23 @@ if __name__ == "__main__":
         num_parallel_calls=1,
         shuffle=False)
 
-    # with tf.Session() as sess:
-    #     ds.init_op.run()
-    #     imgs, _, _, affine_matrixs, _, _ = ds.get_next_batch(sess)
-
-    model = ResNetV2(cfg, converter.num_classes)
-    model.create_architecture()
     with tf.Session() as sess:
         ds.init_op.run()
-        imgs, score_maps, geo_maps, affine_matrixs, affine_rects, labels = ds.get_next_batch(sess)
+        imgs, _, _, affine_matrixs, _, _ = ds.get_next_batch(sess)
 
-        feed = {
-            model.input_images: imgs,
-            model.input_score_maps: score_maps,
-            model.input_geo_maps: geo_maps,
-            model.input_affine_matrixs: affine_matrixs,
-            model.input_affine_rects: affine_rects,
-            model.input_labels: labels,
-            model.is_training: True
-        }
-        sess.run([model.train_op], feed_dict=feed)
+    # model = ResNetV2(cfg, converter.num_classes)
+    # model.create_architecture()
+    # with tf.Session() as sess:
+    #     ds.init_op.run()
+    #     imgs, score_maps, geo_maps, affine_matrixs, affine_rects, labels = ds.get_next_batch(sess)
+    #
+    #     feed = {
+    #         model.input_images: imgs,
+    #         model.input_score_maps: score_maps,
+    #         model.input_geo_maps: geo_maps,
+    #         model.input_affine_matrixs: affine_matrixs,
+    #         model.input_affine_rects: affine_rects,
+    #         model.input_labels: labels,
+    #         model.is_training: True
+    #     }
+    #     sess.run([model.train_op], feed_dict=feed)

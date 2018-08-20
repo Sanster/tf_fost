@@ -13,6 +13,7 @@ def add_scalar_summary(writer, tag, val, step):
 def print_endpoints(net, img_path, CPU=True):
     img_file = tf.read_file(img_path)
     img_decoded = tf.image.decode_image(img_file, channels=3)
+    img_decoded = tf.image.resize_bilinear([img_decoded], (641, 641))[0]
 
     if CPU:
         os.environ['CUDA_VISIBLE_DEVICES'] = ''

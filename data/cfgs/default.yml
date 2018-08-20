@@ -1,7 +1,19 @@
+epochs: 10
+batch_size: 1
+
+lr: 0.1
+lr_decay_epochs:
+  - 3
+  - 6
+lr_decay_rate: 0.5
+
 rnn_num_units: 256
+
+# if text's height is smaller then this value, ignore it
+min_text_height: 10
+
 train:
-  croped_img_size: 640
+  croped_img_size: 641
   share_conv_stride: 4
   roi_rotate_fix_height: 8
   optimizer: 'adadelate'
-  lr: 1.0
