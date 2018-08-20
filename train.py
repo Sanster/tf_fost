@@ -2,6 +2,8 @@ import os
 import time
 import math
 
+from nets.resnet_v2 import ResNetV2
+
 RNG_SEED = 42
 import numpy as np
 
@@ -10,10 +12,11 @@ import tensorflow as tf
 
 tf.set_random_seed(RNG_SEED)
 
-from libs.dataset import ImgDataset
-from libs.label_converter import LabelConverter
+from lib.dataset import Dataset
+from lib.label_converter import LabelConverter
 
 from parse_args import parse_args
+from lib.config import load_config
 
 
 class Trainer(object):
@@ -23,7 +26,8 @@ class Trainer(object):
 
         self.converter = LabelConverter(chars_file=args.chars_file)
 
-        self.tr_ds = ImgDataset(args.train_dir, self.converter, self.cfg.batch_size)
+        self.tr_ds = Dataset(self.cfg, args.train_dir, args.train_gt_dir,
+                             self.converter, self.cfg.batch_size)
 
         self.cfg.lr_boundaries = [self.tr_ds.num_batches * epoch for epoch in self.cfg.lr_decay_epochs]
         self.cfg.lr_values = [self.cfg.lr * (self.cfg.lr_decay_rate ** i) for i in
@@ -32,15 +36,17 @@ class Trainer(object):
         if args.val_dir is None:
             self.val_ds = None
         else:
-            self.val_ds = ImgDataset(args.val_dir, self.converter, self.cfg.batch_size, shuffle=False)
+            self.val_ds = Dataset(self.cfg, args.val_dir, args.val_gt_dir,
+                                  self.converter, self.cfg.batch_size, shuffle=False)
 
         if args.test_dir is None:
             self.test_ds = None
         else:
             # Test images often have different size, so set batch_size to 1
-            self.test_ds = ImgDataset(args.test_dir, self.converter, shuffle=False, batch_size=1)
+            self.test_ds = Dataset(self.cfg, args.test_dir, args.test_gt_dir,
+                                   self.converter, shuffle=False, batch_size=1)
 
-        self.model = CRNN(self.cfg, num_classes=self.converter.num_classes)
+        self.model = ResNetV2()
         self.sess = tf.Session(config=tf.ConfigProto(allow_soft_placement=True))
 
         self.epoch_start_index = 0
@@ -133,18 +139,18 @@ class Trainer(object):
 
         return batch_cost, global_step, lr
 
-    def _do_val(self, dataset, epoch, step, name):
-        if dataset is None:
-            return None
-
-        accuracy, edit_distance = infer.validation(self.sess, self.model.feeds(), self.model.fetches(),
-                                                   dataset, self.converter, self.args.result_dir, name, step)
-
-        tf_utils.add_scalar_summary(self.train_writer, "%s_accuracy" % name, accuracy, step)
-        tf_utils.add_scalar_summary(self.train_writer, "%s_edit_distance" % name, edit_distance, step)
-
-        print("epoch: %d/%d, %s accuracy = %.3f" % (epoch, self.cfg.epochs, name, accuracy))
-        return accuracy
+    # def _do_val(self, dataset, epoch, step, name):
+    #     if dataset is None:
+    #         return None
+    #
+    #     accuracy, edit_distance = infer.validation(self.sess, self.model.feeds(), self.model.fetches(),
+    #                                                dataset, self.converter, self.args.result_dir, name, step)
+    #
+    #     tf_utils.add_scalar_summary(self.train_writer, "%s_accuracy" % name, accuracy, step)
+    #     tf_utils.add_scalar_summary(self.train_writer, "%s_edit_distance" % name, edit_distance, step)
+    #
+    #     print("epoch: %d/%d, %s accuracy = %.3f" % (epoch, self.cfg.epochs, name, accuracy))
+    #     return accuracy
 
     def _save_checkpoint(self, ckpt_dir, step, val_acc=None, test_acc=None):
         ckpt_name = "crnn_%d" % step

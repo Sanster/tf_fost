@@ -20,6 +20,21 @@ def get_ltrb(line):
     return np.asarray([xmin, ymin, xmax, ymax])
 
 
+def get_ltrb_by4vec(line):
+    """
+    :param line: [[x1,y1],[x2,y2],[x3,y3],[x4,y4]]
+    :return: (xmin, ymin, xmax, ymax)
+    """
+    _line = [
+        line[0][0], line[0][1],
+        line[1][0], line[1][1],
+        line[2][0], line[2][1],
+        line[3][0], line[3][1]
+    ]
+
+    return get_ltrb(_line)
+
+
 def get_img_scale(img, scale, max_scale):
     img_size = img.shape
     im_size_min = np.min(img_size[0:2])

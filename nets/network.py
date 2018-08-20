@@ -16,11 +16,16 @@ import numpy as np
 
 from abc import abstractmethod
 
+# noinspection PyAttributeOutsideInit,PyProtectedMember,PyMethodMayBeStatic
+from lib.roi_rotate_layer import roi_rotate_layer
 
-# noinspection PyAttributeOutsideInit,PyProtectedMember,PyMethodMayBeStatic,PyUnresolvedReferences
+
 class Network(object):
-    def __init__(self):
-        pass
+    CTC_INVALID_INDEX = -1
+
+    def __init__(self, cfg, num_classes):
+        self.cfg = cfg
+        self.num_classes = num_classes
 
     @abstractmethod
     def _image_to_head(self, inputs, is_training):
@@ -33,13 +38,20 @@ class Network(object):
         self.input_images = tf.placeholder(tf.float32, shape=[None, None, None, 3], name='input_images')
         self.input_score_maps = tf.placeholder(tf.float32, shape=[None, None, None, 1], name='input_score_maps')
         self.input_geo_maps = tf.placeholder(tf.float32, shape=[None, None, None, 5], name='input_geo_maps')
-        self.input_training_masks = tf.placeholder(tf.float32, shape=[None, None, None, 1], name='input_training_masks')
 
+        # [batch_size,num_of_text_roi,2,3]
+        self.input_affine_matrixs = tf.placeholder(tf.float64, shape=[None, None, 2, 3], name='input_affine_matrixs')
+        # [batch_size,num_of_text_roi,4]
+        self.input_affine_rects = tf.placeholder(tf.float64, shape=[None, None, 4], name='input_affine_pnts')
+
+        self.input_labels = tf.sparse_placeholder(tf.int32, name='text_labels')
         self.is_training = tf.placeholder(tf.bool, name="is_training")
 
         self._build_network()
 
         self._build_losses()
+
+        self._build_train_op()
 
     def _build_network(self):
         # stride 4, channels 320
@@ -47,11 +59,26 @@ class Network(object):
 
         self.F_score, self.F_geometry = self._build_detect_output(self.shared_conv)
 
-        self.detect_loss = self._build_detect_loss(self.input_score_maps, self.F_score,
-                                                   self.input_geo_maps, self.F_geometry,
-                                                   self.input_training_masks)
+        rois, rois_width = self._roi_rotate_layer(self.shared_conv, self.input_affine_matrixs, self.input_affine_rects,
+                                                  self.cfg.train.roi_rotate_fix_height)
 
-        self.total_loss = tf.add_n([self.detect_loss] + tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
+        self.seq_len = rois_width
+
+        self.reco_logits = self._build_reco_output(rois, self.seq_len, self.num_classes)
+
+    def _build_losses(self):
+        self.detect_loss = self._build_detect_loss(self.input_score_maps, self.F_score,
+                                                   self.input_geo_maps, self.F_geometry)
+
+        self.reco_ctc_loss = self._build_reco_loss(self.reco_logits, self.input_labels, self.seq_len)
+
+        self.regularization_loss = tf.add_n(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
+        self.total_loss = self.detect_loss + self.reco_ctc_loss + self.regularization_loss
+
+        tf.summary.scalar('detect_loss', self.detect_loss)
+        tf.summary.scalar('reco_ctc_loss', self.reco_ctc_loss)
+        tf.summary.scalar('regularization_loss', self.regularization_loss)
+        tf.summary.scalar('total_loss', self.total_loss)
 
     def _build_detect_output(self, shared_conv):
         F_score = slim.conv2d(shared_conv, 1, 1, activation_fn=tf.nn.sigmoid, normalizer_fn=None)
@@ -68,22 +95,61 @@ class Network(object):
 
         return F_score, F_geometry
 
-    def _roi_rotate(self, share_conv, y_true_geo, roi_height=8):
+    def _build_train_op(self):
+        self.global_step = tf.Variable(0, trainable=False)
+        self.lr = tf.train.piecewise_constant(self.global_step, self.cfg.lr_boundaries, self.cfg.lr_values)
+
+        tf.summary.scalar("learning_rate", self.lr)
+
+        if self.cfg.train.optimizer == 'adam':
+            self.optimizer = tf.train.AdamOptimizer(learning_rate=self.lr)
+        elif self.cfg.train.optimizer == 'rms':
+            self.optimizer = tf.train.RMSPropOptimizer(learning_rate=self.lr,
+                                                       epsilon=1e-8)
+        elif self.cfg.train.optimizer == 'adadelate':
+            self.optimizer = tf.train.AdadeltaOptimizer(learning_rate=self.lr,
+                                                        rho=0.9,
+                                                        epsilon=1e-06)
+        elif self.cfg.train.optimizer == 'sgd':
+            self.optimizer = tf.train.MomentumOptimizer(learning_rate=self.lr,
+                                                        momentum=0.9)
+
+        # required by batch normalize
+        # add update ops(for moving_mean and moving_variance) as a dependency to the train_op
+        # https://www.tensorflow.org/api_docs/python/tf/layers/batch_normalization
+        update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+        with tf.control_dependencies(update_ops):
+            self.train_op = self.optimizer.minimize(self.total_loss, global_step=self.global_step)
+
+    def _roi_rotate_layer(self, share_conv, affine_matrixs, affine_pnts,
+                          fix_height=8, scope='roi_rotate_layer'):
         """
         根据 ground true 实际位置计算仿射变换的参数，
         然后对 shared feature map 上相应位置区域进行仿射变换，
         获得原图中文字区域经过前向传播后的 feature
         最终的输出是固定高度的，保持长宽比不变
         :param share_conv:
-        :param y_true_geo:
-        :param roi_height: 从 shared feature map 上获得的经过仿射变换后的 roi 高度,
-        roi 的宽度根据长宽比算出
+        :param affine_matrixs
+        :param affine_pnts
+        :param roi_height: 从 shared feature map 上获得的经过仿射变换后的 roi 高度, roi 的宽度根据长宽比算出
         :return:
+            按照一个 batch 里面 roi 最宽的宽度进行 zero padding
+            rois: [roi_batch, fix_height, roi_max_width, channels]
+                roi_batch: 从 image batch 里面抽出文字区域的个数， roi_batch >= image_batch
+                roi_max_width: roi_rotate_layer 中计算出来
+                channels: share_conv 最后一层的通道数
+            rois_width: [roi_batch]
         """
+        with tf.variable_scope(scope):
+            rois, rois_width, roi_max_width = tf.py_func(roi_rotate_layer,
+                                                         [share_conv, fix_height, affine_matrixs, affine_pnts],
+                                                         [tf.float32, tf.int32, tf.int32])
 
-        pass
+            rois.set_shape([None, fix_height, None, share_conv.shape.as_list()[3]])
+            rois_width.set_shape([None])
+        return rois, rois_width
 
-    def _build_detect_loss(self, y_true_cls, y_pred_cls, y_true_geo, y_pred_geo, training_mask):
+    def _build_detect_loss(self, y_true_cls, y_pred_cls, y_true_geo, y_pred_geo):
         '''
         define the loss used for training, contraning two part,
         the first part we use dice loss instead of weighted logloss,
@@ -92,10 +158,9 @@ class Network(object):
         :param y_pred_cls: prediction os text
         :param y_true_geo: ground truth of geometry
         :param y_pred_geo: prediction of geometry
-        :param training_mask: mask used in training, to ignore some text annotated by ###
         :return:
         '''
-        classification_loss = self._dice_coefficient(y_true_cls, y_pred_cls, training_mask)
+        classification_loss = self._dice_coefficient(y_true_cls, y_pred_cls)
         # scale classification loss to match the iou loss part
         classification_loss *= 0.01
 
@@ -110,13 +175,13 @@ class Network(object):
         area_union = area_gt + area_pred - area_intersect
         L_AABB = -tf.log((area_intersect + 1.0) / (area_union + 1.0))
         L_theta = 1 - tf.cos(theta_pred - theta_gt)
-        tf.summary.scalar('geometry_AABB', tf.reduce_mean(L_AABB * y_true_cls * training_mask))
-        tf.summary.scalar('geometry_theta', tf.reduce_mean(L_theta * y_true_cls * training_mask))
+        tf.summary.scalar('geometry_AABB', tf.reduce_mean(L_AABB * y_true_cls))
+        tf.summary.scalar('geometry_theta', tf.reduce_mean(L_theta * y_true_cls))
         L_g = L_AABB + 20 * L_theta
 
-        return tf.reduce_mean(L_g * y_true_cls * training_mask) + classification_loss
+        return tf.reduce_mean(L_g) + classification_loss
 
-    def _dice_coefficient(self, y_true_cls, y_pred_cls, training_mask):
+    def _dice_coefficient(self, y_true_cls, y_pred_cls):
         """
         dice loss
         :param y_true_cls:
@@ -125,8 +190,8 @@ class Network(object):
         :return:
         """
         eps = 1e-5
-        intersection = tf.reduce_sum(y_true_cls * y_pred_cls * training_mask)
-        union = tf.reduce_sum(y_true_cls * training_mask) + tf.reduce_sum(y_pred_cls * training_mask) + eps
+        intersection = tf.reduce_sum(y_true_cls * y_pred_cls)
+        union = tf.reduce_sum(y_true_cls) + tf.reduce_sum(y_pred_cls) + eps
         loss = 1. - (2 * intersection / union)
         tf.summary.scalar('classification_dice_loss', loss)
         return loss
@@ -219,9 +284,6 @@ class Network(object):
             # upsample.set_shape((None, static_in_shape[1] * 2, static_in_shape[2] * 2, out_channels))
             return upsample
 
-    def _build_losses(self):
-        pass
-
     def _get_deconv_filter(self, filter_shape):
         width = filter_shape[0]
         height = filter_shape[1]
@@ -240,6 +302,103 @@ class Network(object):
                                        dtype=tf.float32)
         return tf.get_variable(name="up_filter", initializer=init,
                                shape=weights.shape)
+
+    def _build_reco_output(self, rois, seq_len, num_out, scope='crnn'):
+        """
+        :param rois:
+        :param seq_len:
+        :param num_out: 字符数
+        :param scope:
+        :return:
+        """
+        with tf.variable_scope(scope):
+            net = slim.conv2d(rois, 64, 3, 1, scope='conv1')
+            net = slim.conv2d(net, 64, 3, 1, scope='conv2')
+            net = slim.max_pool2d(net, [2, 1], [2, 1], scope='pool1')
+
+            net = slim.conv2d(net, 128, 3, 1, scope='conv3')
+            net = slim.conv2d(net, 128, 3, 1, scope='conv4')
+            net = slim.max_pool2d(net, [2, 1], [2, 1], scope='pool2')
+
+            net = slim.conv2d(net, 256, 3, 1, scope='conv5')
+            net = slim.conv2d(net, 256, 3, 1, scope='conv6')
+            net = slim.max_pool2d(net, [2, 1], [2, 1], scope='pool3')
+            print(net.shape)
+            print(seq_len.shape)
+
+            cnn_out = net
+            cnn_output_shape = tf.shape(cnn_out)
+
+            batch_size = cnn_output_shape[0]
+            cnn_output_h = cnn_output_shape[1]
+            cnn_output_w = cnn_output_shape[2]
+            cnn_output_channel = cnn_output_shape[3]
+
+            # Reshape to the shape lstm needed. [batch_size, max_time, ..]
+            cnn_out_transposed = tf.transpose(cnn_out, [0, 2, 1, 3])
+            cnn_out_reshaped = tf.reshape(cnn_out_transposed,
+                                          [batch_size, cnn_output_w, cnn_output_h * cnn_output_channel])
+
+            cnn_shape = cnn_out.get_shape().as_list()
+            cnn_out_reshaped.set_shape([None, cnn_shape[2], cnn_shape[1] * cnn_shape[3]])
+
+            with tf.variable_scope('bilstm'):
+                bilstm = self._bidirectional_LSTM(cnn_out_reshaped, seq_len, num_out)
+
+        # ctc require time major
+        logits = tf.transpose(bilstm, (1, 0, 2))
+
+        # inputs shape: [max_time x batch_size x num_classes]
+        self.decoded, self.log_prob = tf.nn.ctc_greedy_decoder(logits, seq_len, merge_repeated=True)
+
+        # dense_decoded shape: [batch_size, encoded_code_size(not fix)]
+        # use tf.cast here to support run model on Android
+        self.dense_decoded = tf.sparse_tensor_to_dense(tf.cast(self.decoded[0], tf.int32),
+                                                       default_value=self.CTC_INVALID_INDEX, name="output")
+
+        # Edit distance for wrong result
+        self.edit_distances = tf.edit_distance(tf.cast(self.decoded[0], tf.int32), self.input_labels)
+
+        non_zero_indices = tf.where(tf.not_equal(self.edit_distances, 0))
+        self.edit_distance = tf.reduce_mean(tf.gather(self.edit_distances, non_zero_indices))
+
+        return logits
+
+    def _bidirectional_LSTM(self, inputs, seq_len, num_out):
+        outputs, _ = tf.nn.bidirectional_dynamic_rnn(self._LSTM_cell(),
+                                                     self._LSTM_cell(),
+                                                     inputs,
+                                                     sequence_length=seq_len,
+                                                     dtype=tf.float32)
+
+        outputs = tf.concat(outputs, 2)
+        outputs = tf.reshape(outputs, [-1, self.cfg.rnn_num_units * 2])
+
+        outputs = slim.fully_connected(outputs, num_out, activation_fn=None)
+
+        shape = tf.shape(inputs)
+        outputs = tf.reshape(outputs, [shape[0], -1, num_out])
+
+        return outputs
+
+    def _LSTM_cell(self, num_proj=None):
+        cell = tf.nn.rnn_cell.LSTMCell(num_units=self.cfg.rnn_num_units, num_proj=num_proj)
+        # if self.cfg.rnn_keep_prob < 1:
+        #     cell = tf.contrib.rnn.DropoutWrapper(cell=cell, output_keep_prob=self.cfg.rnn_keep_prob)
+        return cell
+
+    def _build_reco_loss(self, reco_logits, input_labels, seq_len):
+        # labels:   An `int32` `SparseTensor`.
+        #           `labels.indices[i, :] == [b, t]` means `labels.values[i]` stores
+        #           the id for (batch b, time t).
+        #           `labels.values[i]` must take on values in `[0, num_labels)`.
+        # inputs shape: [max_time, batch_size, num_classes]`
+        ctc_loss = tf.nn.ctc_loss(labels=input_labels,
+                                  inputs=reco_logits,
+                                  ignore_longer_outputs_than_inputs=True,
+                                  sequence_length=seq_len)
+        ctc_loss = tf.reduce_mean(ctc_loss)
+        return ctc_loss
 
 # def train_step(self, sess, blobs, train_op):
 #     feed_dict = {self._image: blobs['data'], self._im_info: blobs['im_info'],

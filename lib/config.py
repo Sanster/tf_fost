@@ -13,6 +13,3 @@ def load_config(net_name='default'):
     for k, v in cfg.items():
         print('%s: %s' % (k, v))
     return cfg
-
-
-cfg = load_config()

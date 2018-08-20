@@ -1,4 +1,7 @@
-TRAIN:
-  CROPED_IMG_SIZE: 640
-  SHARE_CONV_STRIDE: 4
-  ROI_ROTATE_FIX_HEIGHT: 8
+rnn_num_units: 256
+train:
+  croped_img_size: 640
+  share_conv_stride: 4
+  roi_rotate_fix_height: 8
+  optimizer: 'adadelate'
+  lr: 1.0

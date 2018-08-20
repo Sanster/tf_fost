@@ -256,8 +256,8 @@ def resnet_v2_50(inputs,
 
 
 class ResNetV2(Network):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, cfg, num_classes):
+        super().__init__(cfg, num_classes)
         self._scope = 'resnet_v2_50'
 
     def _image_to_head(self, inputs, is_training):
@@ -277,7 +277,7 @@ class ResNetV2(Network):
 if __name__ == '__main__':
     import sys
 
-    sys.path.insert(0, '../libs')
+    sys.path.insert(0, '../lib')
     from tf_utils import print_endpoints
 
     img_file = '/home/cwq/data/VOCdevkit2007/VOC2007/JPEGImages/icdar13_100.jpg'
