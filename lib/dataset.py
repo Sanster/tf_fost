@@ -192,8 +192,8 @@ class Dataset:
                 affine_rects.append(rect)
                 text_roi_count += 1
 
-        affine_matrixs = np.asarray(affine_matrixs)
-        affine_rects = np.asarray(affine_rects)
+        affine_matrixs = np.asarray(affine_matrixs).astype(np.float32)
+        affine_rects = np.asarray(affine_rects).astype(np.int32)
         if DEBUG:
             print(affine_matrixs.shape)
             print(affine_rects.shape)
@@ -265,30 +265,6 @@ class Dataset:
         rect = rect.astype(np.int32)
         # print("after clip")
         # print(rect)
-
-        # print(pnts_affined)
-
-        # print(pnts_affined.shape)
-
-        # Debug: check whether cv2.transform works right
-        # src = rbox[0][:3]
-        # dst = pnts_affined[0][:3]
-        # _M = cv2.getAffineTransform(src.astype(np.float32), dst.astype(np.float32))
-        # print("MMMMMMMMMM")
-        # print(M)
-        # print("__________")
-        # print(_M)
-
-        # print("Before stack")
-        # print(M.shape)
-        # print(M)
-        # Tensorflow matrices_to_flat_transforms need 3x3
-        # https://www.tensorflow.org/api_docs/python/tf/contrib/image/matrices_to_flat_transforms
-        # M = np.vstack([M, [0, 0, 1]])
-        # print("After stack")
-        # print(M.shape)
-        # print(M)
-
         return M, rect
 
     def _crop_img(self, img, mlt_gts):

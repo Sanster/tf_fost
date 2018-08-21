@@ -197,6 +197,7 @@ class Network(object):
         L_theta = 1 - tf.cos(theta_pred - theta_gt)
         tf.summary.scalar('geometry_AABB', tf.reduce_mean(L_AABB * y_true_cls))
         tf.summary.scalar('geometry_theta', tf.reduce_mean(L_theta * y_true_cls))
+
         L_g = L_AABB + 20 * L_theta
 
         return tf.reduce_mean(L_g) + classification_loss
