@@ -83,10 +83,12 @@ class Network(object):
         self.regularization_loss = tf.add_n(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
         self.total_loss = self.detect_loss + self.reco_ctc_loss + self.regularization_loss
 
-        # tf.summary.scalar('detect_loss', self.detect_loss)
-        # tf.summary.scalar('reco_ctc_loss', self.reco_ctc_loss)
-        # tf.summary.scalar('regularization_loss', self.regularization_loss)
-        # tf.summary.scalar('total_loss', self.total_loss)
+        tf.summary.scalar('detect_loss', self.detect_loss)
+        tf.summary.scalar('detect_cls_loss', self.detect_cls_loss)
+        tf.summary.scalar('detect_reg_loss', self.detect_reg_loss)
+        tf.summary.scalar('reco_ctc_loss', self.reco_ctc_loss)
+        tf.summary.scalar('regularization_loss', self.regularization_loss)
+        tf.summary.scalar('total_loss', self.total_loss)
 
     def _build_detect_output(self, shared_conv):
         F_score = slim.conv2d(shared_conv, 1, 1, activation_fn=tf.nn.sigmoid, normalizer_fn=None)
@@ -182,7 +184,7 @@ class Network(object):
         '''
         classification_loss = self._dice_coefficient(y_true_cls, y_pred_cls)
         # scale classification loss to match the iou loss part
-        classification_loss *= 0.01
+        # classification_loss *= 0.01
 
         # d1 -> top, d2->right, d3->bottom, d4->left
         d1_gt, d2_gt, d3_gt, d4_gt, theta_gt = tf.split(value=y_true_geo, num_or_size_splits=5, axis=3)
@@ -198,9 +200,12 @@ class Network(object):
         tf.summary.scalar('geometry_AABB', tf.reduce_mean(L_AABB * y_true_cls))
         tf.summary.scalar('geometry_theta', tf.reduce_mean(L_theta * y_true_cls))
 
-        L_g = L_AABB + 20 * L_theta
+        L_g = tf.reduce_mean(L_AABB + 10 * L_theta)
 
-        return tf.reduce_mean(L_g) + classification_loss
+        self.detect_cls_loss = classification_loss
+        self.detect_reg_loss = L_g
+
+        return L_g + classification_loss
 
     def _dice_coefficient(self, y_true_cls, y_pred_cls):
         """

@@ -170,10 +170,21 @@ class Dataset:
 
         score_map, geo_map = self.generate_rbox(img.shape, mlt_gts)
 
+        valid_text_count = 0
+        for gt in mlt_gts:
+            ignore = gt[-1]
+            if not ignore:
+                # Ground true label data for CRNN
+                encoded_label = self.converter.encode(gt[-2])
+                if len(encoded_label) == 0:
+                    continue
+                valid_text_count += 1
+
         labels = []
-        affine_matrixs = []
-        affine_rects = []
-        text_roi_count = 0
+        affine_matrixs = np.zeros((valid_text_count, 2, 3), np.float64)
+        affine_rects = np.zeros((valid_text_count, 4), np.int32)
+
+        count = 0
         for gt in mlt_gts:
             ignore = gt[-1]
             if not ignore:
@@ -183,22 +194,18 @@ class Dataset:
                     continue
 
                 labels.append(gt[-2])
-
                 # 计算访射变换
                 M, rect = self._get_affine_M(gt[0], self.cfg.train.share_conv_stride,
                                              self.cfg.train.roi_rotate_fix_height)
-                # print(M.shape)
-                affine_matrixs.append(M)
-                affine_rects.append(rect)
-                text_roi_count += 1
+                affine_matrixs[count][:] = M
+                affine_rects[count][:] = rect
+                count += 1
 
-        affine_matrixs = np.asarray(affine_matrixs).astype(np.float32)
-        affine_rects = np.asarray(affine_rects).astype(np.int32)
         if DEBUG:
             print(affine_matrixs.shape)
             print(affine_rects.shape)
 
-        return img, score_map, geo_map, [text_roi_count], affine_matrixs, affine_rects, labels, [img_path]
+        return img, score_map, geo_map, [valid_text_count], affine_matrixs, affine_rects, labels, [img_path]
 
     def _get_affine_M(self, poly, stride=4, fix_height=8):
         """

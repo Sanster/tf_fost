@@ -69,17 +69,18 @@ class Trainer(object):
 
             for batch in range(self.batch_start_index, self.tr_ds.num_batches):
                 batch_start_time = time.time()
-                total_cost, detect_loss, reco_loss, global_step, lr = self._train()
+                total_cost, detect_loss, detect_cls_loss, detect_reg_loss, reco_loss, global_step, lr = self._train()
 
                 # if batch != 0 and (batch % self.args.log_step == 0):
                 #     batch_cost, global_step, lr = self._train_with_summary()
                 # else:
                 #     batch_cost, global_step, lr = self._train()
 
-                print("{:.02f}s, epoch: {}, batch: {}/{}, "
-                      "total_loss: {:.03}, detect_loss: {:.03}, reco_loss: {:.03},  lr: {:.05}"
+                print("{:.02f}s, epoch: {}, batch: {}/{}, total_loss: {:.03}, "
+                      "detect_loss: {:.03}, detect_cls_loss: {:.03}, detect_reg_loss: {:.03}, "
+                      "reco_loss: {:.03},  lr: {:.05}"
                       .format(time.time() - batch_start_time, epoch, batch, self.tr_ds.num_batches,
-                              total_cost, detect_loss, reco_loss, lr))
+                              total_cost, detect_loss, detect_cls_loss, detect_reg_loss, reco_loss, lr))
 
                 # if global_step != 0 and (global_step % self.args.val_step == 0):
                 #     val_acc = self._do_val(self.val_ds, epoch, global_step, "val")
@@ -114,6 +115,8 @@ class Trainer(object):
         fetches = [
             self.model.total_loss,
             self.model.detect_loss,
+            self.model.detect_cls_loss,
+            self.model.detect_reg_loss,
             self.model.reco_ctc_loss,
             self.model.global_step,
             self.model.lr,
@@ -132,12 +135,13 @@ class Trainer(object):
         }
 
         # try:
-        total_loss, detect_loss, reco_ctc_loss, global_step, lr, _ = self.sess.run(fetches, feed)
+        total_loss, detect_loss, detect_cls_loss, detect_reg_loss, reco_ctc_loss, global_step, lr, _ = self.sess.run(
+            fetches, feed)
         # except:
         #     print(img_paths)
         #     exit(-1)
 
-        return total_loss, detect_loss, reco_ctc_loss, global_step, lr
+        return total_loss, detect_loss, detect_cls_loss, detect_reg_loss, reco_ctc_loss, global_step, lr
 
     # def _train_with_summary(self):
     #     img_batch, label_batch, labels, _ = self.tr_ds.get_next_batch(self.sess)
