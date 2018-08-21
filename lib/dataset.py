@@ -13,6 +13,7 @@ from lib.icdar_utils import load_mlt_gt, get_ltrb, get_ltrb_by4vec
 
 # noinspection PyMethodMayBeStatic
 from lib.label_converter import LabelConverter
+from lib.utils import clip
 
 DEBUG = False
 
@@ -55,16 +56,32 @@ class Dataset:
         return base_names
 
     def get_next_batch(self, sess):
-        imgs, score_maps, geo_maps, affine_matrixs, affine_rects, labels = sess.run(self.next_batch)
+        imgs, score_maps, geo_maps, text_roi_count, affine_matrixs, affine_rects, labels, img_paths = sess.run(
+            self.next_batch)
 
-        sparse_labels = []
+        if DEBUG:
+            print("text_roi_count")
+            print(text_roi_count)
+            print("affine_matrixs shape")
+            print(affine_matrixs.shape)
+            print("affine_rects shape")
+            print(affine_rects.shape)
+
+        batch_encoded_labels = []
         for img_labels in labels:
             decoded_labels = [l.decode() for l in img_labels]
-            # print(decoded_labels)
+            # remove padded labels
+            decoded_labels = list(filter(lambda x: x, decoded_labels))
             encoded_labels = self.converter.encode_list(decoded_labels)
-            sparse_labels.append(self._sparse_tuple_from_label(encoded_labels))
+            batch_encoded_labels.extend(encoded_labels)
 
-        return imgs, score_maps, geo_maps, affine_matrixs, affine_rects, sparse_labels
+        sparse_labels = self._sparse_tuple_from_label(batch_encoded_labels)
+
+        batch_img_paths = []
+        for p in img_paths:
+            batch_img_paths.append(p[0])
+
+        return imgs, score_maps, geo_maps, text_roi_count, affine_matrixs, affine_rects, sparse_labels, batch_img_paths
 
     def _create_dataset(self):
         tf_base_names = tf.convert_to_tensor(self.base_names, dtype=dtypes.string)
@@ -78,9 +95,19 @@ class Dataset:
             d = d.shuffle(buffer_size=self.size)
 
         d = d.map(lambda base_name: tf.py_func(self._input_py_parser, [base_name],
-                                               [tf.uint8, tf.float32, tf.float32, tf.float64, tf.int32, tf.string]))
+                                               [tf.uint8, tf.float32, tf.float32, tf.int64, tf.float64, tf.int32,
+                                                tf.string, tf.string]))
 
-        d = d.batch(self.batch_size)
+        # d = d.batch(self.batch_size)
+        d = d.padded_batch(self.batch_size,
+                           padded_shapes=([self.cfg.train.croped_img_size, self.cfg.train.croped_img_size, 3],
+                                          [160, 160, 1],
+                                          [160, 160, 5],
+                                          [1],
+                                          [None, 2, 3],
+                                          [None, 4],
+                                          [None],
+                                          [None]))
         d = d.prefetch(buffer_size=2)
         return d
 
@@ -146,27 +173,36 @@ class Dataset:
         labels = []
         affine_matrixs = []
         affine_rects = []
+        text_roi_count = 0
         for gt in mlt_gts:
             ignore = gt[-1]
             if not ignore:
                 # Ground true label data for CRNN
+                encoded_label = self.converter.encode(gt[-2])
+                if len(encoded_label) == 0:
+                    continue
+
                 labels.append(gt[-2])
 
                 # 计算访射变换
-                M, pnts = self._get_affine_M(gt[0], self.cfg.train.share_conv_stride,
+                M, rect = self._get_affine_M(gt[0], self.cfg.train.share_conv_stride,
                                              self.cfg.train.roi_rotate_fix_height)
                 # print(M.shape)
                 affine_matrixs.append(M)
-                affine_rects.append(pnts)
+                affine_rects.append(rect)
+                text_roi_count += 1
 
         affine_matrixs = np.asarray(affine_matrixs)
         affine_rects = np.asarray(affine_rects)
-        # print(affine_matrixs.shape)
-        # print(affine_rects.shape)
-        return img, score_map, geo_map, affine_matrixs, affine_rects, labels
+        if DEBUG:
+            print(affine_matrixs.shape)
+            print(affine_rects.shape)
+
+        return img, score_map, geo_map, [text_roi_count], affine_matrixs, affine_rects, labels, [img_path]
 
     def _get_affine_M(self, poly, stride=4, fix_height=8):
         """
+        先将 roi 的中心移至图片中心，再进行旋转
         :param poly: [[x1,y1],[x2,y2],[x3,y3],[x4,y4]]
         :param stride: share feature 最后输出的大小为原图的 1/4, 用来计算 gt rbox 映射到 feature map 层的坐标
         :param fix_height: 论文中将 share feature 上对应的 gt 区域都访射变换到高度为8
@@ -179,27 +215,56 @@ class Dataset:
         # 最后一层 feature map 上的坐标按照 stride 缩小
         rbox[0] = rbox[0] / stride
 
-        cx = (rbox[0][0][0] + rbox[0][2][0]) / 2
-        cy = (rbox[0][0][1] + rbox[0][2][1]) / 2
+        rect = rbox[0]
+
+        # TODO: rewrite this
+        cx = 80
+        cy = 80
         angle = rbox[1]
 
-        # TODO: Is this right??
         # 最后一层 feature map 上 roi 的长宽
         roi_w = int(np.linalg.norm(rbox[0][0] - rbox[0][1]))
         roi_h = int(np.linalg.norm(rbox[0][1] - rbox[0][2]))
 
         # 放大的倍数，e.g 放大 1.2 倍，放大 0.5 倍(即缩小2倍)
         scale = fix_height / roi_h
-        # roi_scale_w = int(roi_w * scale)
+        roi_scale_w = int(roi_w * scale)
+
+        src = np.float32([
+            rect[0], rect[1], rect[2]
+        ])
+
+        dst = np.float32([
+            [int(cx - roi_scale_w / 2), int(cy - fix_height / 2)],
+            [int(cx + roi_scale_w / 2), int(cy - fix_height / 2)],
+            [int(cx + roi_scale_w / 2), int(cy + fix_height / 2)],
+        ])
 
         # 返回 2 x 3 的矩阵, float64
-        M = cv2.getRotationMatrix2D((cx, cy), angle, scale)
+        M = cv2.getAffineTransform(src, dst)
 
         # (4,2) float64
-        pnts_affined = cv2.transform(np.asarray([rbox[0]]), M)[0]
+        pnts_affined = np.int32([
+            [int(cx - roi_scale_w / 2), int(cy - fix_height / 2)],
+            [int(cx + roi_scale_w / 2), int(cy - fix_height / 2)],
+            [int(cx + roi_scale_w / 2), int(cy + fix_height / 2)],
+            [int(cx - roi_scale_w / 2), int(cy + fix_height / 2)],
+        ])
         pnts_affined = clockwise_points(pnts_affined)
-        pnts_affined = get_ltrb_by4vec(pnts_affined)
-        pnts_affined = pnts_affined.astype(np.int32)
+        ltrb = get_ltrb_by4vec(pnts_affined)
+        rect = ltrb.astype(np.int32)
+
+        # TODO: 太粗暴了？
+        # make rect height is 8
+        if rect[3] - rect[1] != fix_height:
+            rect[3] = rect[1] + fix_height
+
+        # print("before clip")
+        # print(rect)
+        rect = clip(rect, (160, 160))
+        rect = rect.astype(np.int32)
+        # print("after clip")
+        # print(rect)
 
         # print(pnts_affined)
 
@@ -224,7 +289,7 @@ class Dataset:
         # print(M.shape)
         # print(M)
 
-        return M, pnts_affined
+        return M, rect
 
     def _crop_img(self, img, mlt_gts):
         """
@@ -375,13 +440,13 @@ if __name__ == "__main__":
         img_dir='/home/cwq/data/MLT2017/val',
         gt_dir='/home/cwq/data/MLT2017/val_gt',
         converter=converter,
-        batch_size=1,
+        batch_size=6,
         num_parallel_calls=1,
         shuffle=False)
 
     with tf.Session() as sess:
         ds.init_op.run()
-        imgs, _, _, affine_matrixs, _, _ = ds.get_next_batch(sess)
+        imgs, _, _, _, affine_matrixs, _, _ = ds.get_next_batch(sess)
 
     # model = ResNetV2(cfg, converter.num_classes)
     # model.create_architecture()

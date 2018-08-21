@@ -162,11 +162,11 @@ def clip(ltrb, size):
 
     if xmin < 0:
         xmin = 0
-    if xmax > size[1] - 1:
-        xmax = size[1] - 1
+    if xmax > size[1]:
+        xmax = size[1]
     if ymin < 0:
         ymin = 0
-    if ymax > size[0] - 1:
-        ymax = size[0] - 1
+    if ymax > size[0]:
+        ymax = size[0]
 
-    return xmin, ymin, xmax, ymax
+    return np.asarray([xmin, ymin, xmax, ymax])

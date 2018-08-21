@@ -101,7 +101,9 @@ class Trainer(object):
     #     print("Restored batch_start_index: %d" % self.batch_start_index)
 
     def _train(self):
-        imgs, score_maps, geo_maps, affine_matrixs, affine_rects, labels = self.tr_ds.get_next_batch(self.sess)
+        imgs, score_maps, geo_maps, text_roi_count, affine_matrixs, affine_rects, labels, img_paths = \
+            self.tr_ds.get_next_batch(self.sess)
+
         # print(imgs.shape)
         # print(score_maps.shape)
         # print(geo_maps.shape)
@@ -112,7 +114,7 @@ class Trainer(object):
         fetches = [
             self.model.total_loss,
             self.model.detect_loss,
-            # self.model.reco_ctc_loss,
+            self.model.reco_ctc_loss,
             self.model.global_step,
             self.model.lr,
             self.model.train_op
@@ -122,14 +124,20 @@ class Trainer(object):
             self.model.input_images: imgs,
             self.model.input_score_maps: score_maps,
             self.model.input_geo_maps: geo_maps,
+            self.model.input_text_roi_count: text_roi_count,
             self.model.input_affine_matrixs: affine_matrixs,
             self.model.input_affine_rects: affine_rects,
-            # self.model.input_labels: labels,
+            self.model.input_text_labels: labels,
             self.model.is_training: True
         }
 
-        total_loss, detect_loss, global_step, lr, _ = self.sess.run(fetches, feed)
-        return total_loss, detect_loss, 1.0, global_step, lr
+        # try:
+        total_loss, detect_loss, reco_ctc_loss, global_step, lr, _ = self.sess.run(fetches, feed)
+        # except:
+        #     print(img_paths)
+        #     exit(-1)
+
+        return total_loss, detect_loss, reco_ctc_loss, global_step, lr
 
     # def _train_with_summary(self):
     #     img_batch, label_batch, labels, _ = self.tr_ds.get_next_batch(self.sess)

@@ -40,12 +40,15 @@ class Network(object):
         self.input_score_maps = tf.placeholder(tf.float32, shape=[None, None, None, 1], name='input_score_maps')
         self.input_geo_maps = tf.placeholder(tf.float32, shape=[None, None, None, 5], name='input_geo_maps')
 
-        # [batch_size,num_of_text_roi,2,3]
+        # num_of_text_roi for each image
+        self.input_text_roi_count = tf.placeholder(tf.int32, shape=[None, 1], name='input_text_roi_count')
+        # [batch_size, padded num of text roi, 2, 3]
         self.input_affine_matrixs = tf.placeholder(tf.float64, shape=[None, None, 2, 3], name='input_affine_matrixs')
-        # [batch_size,num_of_text_roi,4]
-        self.input_affine_rects = tf.placeholder(tf.float64, shape=[None, None, 4], name='input_affine_pnts')
+        # [batch_size, padded num of text roi, 4]
+        self.input_affine_rects = tf.placeholder(tf.int32, shape=[None, None, 4], name='input_affine_pnts')
 
-        # self.input_labels = tf.sparse_placeholder(tf.int32, name='text_labels')
+        self.input_text_labels = tf.sparse_placeholder(tf.int32, name='input_text_labels')
+
         self.is_training = tf.placeholder(tf.bool, name="is_training")
 
         self._build_network()
@@ -57,27 +60,28 @@ class Network(object):
     def _build_network(self):
         # stride 4, channels 320
         self.shared_conv = self._build_share_conv()
+
         print("Shared conv shape")
         print(self.shared_conv)
 
         self.F_score, self.F_geometry = self._build_detect_output(self.shared_conv)
 
-        # rois, rois_width = self._roi_rotate_layer(self.shared_conv, self.input_affine_matrixs, self.input_affine_rects,
-        #                                           self.cfg.train.roi_rotate_fix_height)
-        #
-        # self.seq_len = rois_width
-        #
-        # self.reco_logits = self._build_reco_output(rois, self.seq_len, self.num_classes)
+        rois, rois_width = self._roi_rotate_layer(self.shared_conv, self.input_text_roi_count,
+                                                  self.input_affine_matrixs, self.input_affine_rects,
+                                                  self.cfg.train.roi_rotate_fix_height)
+
+        self.seq_len = rois_width
+
+        self.reco_logits = self._build_reco_output(rois, self.seq_len, self.num_classes)
 
     def _build_losses(self):
         self.detect_loss = self._build_detect_loss(self.input_score_maps, self.F_score,
                                                    self.input_geo_maps, self.F_geometry)
 
-        # self.reco_ctc_loss = self._build_reco_loss(self.reco_logits, self.input_labels, self.seq_len)
+        self.reco_ctc_loss = self._build_reco_loss(self.reco_logits, self.input_text_labels, self.seq_len)
 
         self.regularization_loss = tf.add_n(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
-        # self.total_loss = self.detect_loss + self.reco_ctc_loss + self.regularization_loss
-        self.total_loss = self.detect_loss + self.regularization_loss
+        self.total_loss = self.detect_loss + self.reco_ctc_loss + self.regularization_loss
 
         # tf.summary.scalar('detect_loss', self.detect_loss)
         # tf.summary.scalar('reco_ctc_loss', self.reco_ctc_loss)
@@ -95,7 +99,7 @@ class Network(object):
         #                       normalizer_fn=None) * 512
 
         geo_map = slim.conv2d(shared_conv, 4, 1, activation_fn=tf.nn.sigmoid,
-                              normalizer_fn=None)
+                              normalizer_fn=None) * 512
         print("geo_map shape")
         print(geo_map)
 
@@ -135,7 +139,7 @@ class Network(object):
         with tf.control_dependencies(update_ops):
             self.train_op = self.optimizer.minimize(self.total_loss, global_step=self.global_step)
 
-    def _roi_rotate_layer(self, share_conv, affine_matrixs, affine_pnts,
+    def _roi_rotate_layer(self, share_conv, text_roi_count, affine_matrixs, affine_pnts,
                           fix_height=8, scope='roi_rotate_layer'):
         """
         根据 ground true 实际位置计算仿射变换的参数，
@@ -143,6 +147,7 @@ class Network(object):
         获得原图中文字区域经过前向传播后的 feature
         最终的输出是固定高度的，保持长宽比不变
         :param share_conv:
+        :param text_roi_count: 每张图片中实际包含了几个文字区域
         :param affine_matrixs
         :param affine_pnts
         :param roi_height: 从 shared feature map 上获得的经过仿射变换后的 roi 高度, roi 的宽度根据长宽比算出
@@ -155,9 +160,10 @@ class Network(object):
             rois_width: [roi_batch]
         """
         with tf.variable_scope(scope):
-            rois, rois_width, roi_max_width = tf.py_func(roi_rotate_layer,
-                                                         [share_conv, fix_height, affine_matrixs, affine_pnts],
-                                                         [tf.float32, tf.int32, tf.int32])
+            rois, rois_width = tf.py_func(roi_rotate_layer,
+                                          [share_conv, fix_height, text_roi_count, affine_matrixs,
+                                           affine_pnts],
+                                          [tf.float32, tf.int32])
 
             rois.set_shape([None, fix_height, None, share_conv.shape.as_list()[3]])
             rois_width.set_shape([None])
@@ -332,7 +338,7 @@ class Network(object):
 
     def _build_reco_output(self, rois, seq_len, num_out, scope='crnn'):
         """
-        :param rois:
+        :param rois: [roi_batch, fix_height, roi_max_width, channels]
         :param seq_len:
         :param num_out: 字符数
         :param scope:
@@ -384,7 +390,7 @@ class Network(object):
                                                        default_value=self.CTC_INVALID_INDEX, name="output")
 
         # Edit distance for wrong result
-        self.edit_distances = tf.edit_distance(tf.cast(self.decoded[0], tf.int32), self.input_labels)
+        self.edit_distances = tf.edit_distance(tf.cast(self.decoded[0], tf.int32), self.input_text_labels)
 
         non_zero_indices = tf.where(tf.not_equal(self.edit_distances, 0))
         self.edit_distance = tf.reduce_mean(tf.gather(self.edit_distances, non_zero_indices))
@@ -410,8 +416,8 @@ class Network(object):
 
     def _LSTM_cell(self, num_proj=None):
         cell = tf.nn.rnn_cell.LSTMCell(num_units=self.cfg.rnn_num_units, num_proj=num_proj)
-        # if self.cfg.rnn_keep_prob < 1:
-        #     cell = tf.contrib.rnn.DropoutWrapper(cell=cell, output_keep_prob=self.cfg.rnn_keep_prob)
+        if self.cfg.rnn_keep_prob < 1:
+            cell = tf.contrib.rnn.DropoutWrapper(cell=cell, output_keep_prob=self.cfg.rnn_keep_prob)
         return cell
 
     def _build_reco_loss(self, reco_logits, input_labels, seq_len):
@@ -420,8 +426,11 @@ class Network(object):
         #           the id for (batch b, time t).
         #           `labels.values[i]` must take on values in `[0, num_labels)`.
         # inputs shape: [max_time, batch_size, num_classes]`
-        ctc_loss = tf.nn.ctc_loss(labels=input_labels,
-                                  inputs=reco_logits,
+
+        # reco_logits batch_size 的顺序必须和 input_labels 的顺序一样
+        # 这一点是通过 dataset.py 中 _input_py_parser 保证的
+        ctc_loss = tf.nn.ctc_loss(inputs=reco_logits,
+                                  labels=input_labels,
                                   ignore_longer_outputs_than_inputs=True,
                                   sequence_length=seq_len)
         ctc_loss = tf.reduce_mean(ctc_loss)

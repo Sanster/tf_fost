@@ -120,14 +120,40 @@ if __name__ == "__main__":
 
     ori_img = img.copy()
     for rbox in rboxs:
+        # print(rbox)
+        #
+        # cy = int((rbox[0][0][1] + rbox[0][2][1]) / 2)
+        # cx = int((rbox[0][0][0] + rbox[0][2][0]) / 2)
+        #
+        # ori_img = cv2.circle(ori_img, (cx, cy), radius=5, color=(0, 0, 255))
+        #
+        # angle = rbox[1]
+        #
+        # roi_w = int(np.linalg.norm(rbox[0][0] - rbox[0][1]))
+        # roi_h = int(np.linalg.norm(rbox[0][1] - rbox[0][2]))
+        #
+        # scale = fixed_height / roi_h
+        # roi_scale_w = int(roi_w * scale)
+        #
+        # M = cv2.getRotationMatrix2D((cx, cy), angle, scale)
+        #
+        # scale_h = int(h * scale)
+        # scale_w = int(w * scale)
+        #
+        # affine_img = cv2.warpAffine(img, M, (w, h))
+        #
+        # # 在 warpAffine 后的图片上截取高度为 32 的区域
+        # pnts_affined = cv2.transform(np.asarray([rbox[0]]), M)[0]
+        # affine_img = cv2_utils.draw_four_vectors(affine_img, pnts_affined, color=(255, 0, 0))
+
         print(rbox)
 
-        cy = int((rbox[0][0][1] + rbox[0][2][1]) / 2)
-        cx = int((rbox[0][0][0] + rbox[0][2][0]) / 2)
-
-        ori_img = cv2.circle(ori_img, (cx, cy), radius=5, color=(0, 0, 255))
-
         angle = rbox[1]
+        rect = rbox[0]
+        roi_cy = int((rbox[0][0][1] + rbox[0][2][1]) / 2)
+        roi_cx = int((rbox[0][0][0] + rbox[0][2][0]) / 2)
+        cx = int(w / 2)
+        cy = int(h / 2)
 
         roi_w = int(np.linalg.norm(rbox[0][0] - rbox[0][1]))
         roi_h = int(np.linalg.norm(rbox[0][1] - rbox[0][2]))
@@ -135,10 +161,17 @@ if __name__ == "__main__":
         scale = fixed_height / roi_h
         roi_scale_w = int(roi_w * scale)
 
-        M = cv2.getRotationMatrix2D((cx, cy), angle, scale)
+        src = np.float32([
+            rect[0], rect[1], rect[2]
+        ])
 
-        scale_h = int(h * scale)
-        scale_w = int(w * scale)
+        dst = np.float32([
+            [int(cx - roi_scale_w / 2), int(cy - fixed_height / 2)],
+            [int(cx + roi_scale_w / 2), int(cy - fixed_height / 2)],
+            [int(cx + roi_scale_w / 2), int(cy + fixed_height / 2)],
+        ])
+
+        M = cv2.getAffineTransform(src, dst)
 
         affine_img = cv2.warpAffine(img, M, (w, h))
 
@@ -146,6 +179,9 @@ if __name__ == "__main__":
         pnts_affined = cv2.transform(np.asarray([rbox[0]]), M)[0]
         affine_img = cv2_utils.draw_four_vectors(affine_img, pnts_affined, color=(255, 0, 0))
 
+        """
+        将 roi 区域移动到图片中心后再旋转
+        """
         cv2.imshow('test', affine_img)
         cv2.waitKey()
 
