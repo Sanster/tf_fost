@@ -51,6 +51,15 @@ class Trainer(object):
         self.model.create_architecture()
         self.sess = tf.Session(config=tf.ConfigProto(allow_soft_placement=True))
 
+        if args.pretrained_model:
+            var_keep_dic = self.get_variables_in_checkpoint_file(args.pretrained_model)
+            print('Loading initial model weights from {:s}'.format(args.pretrained_model))
+            variables_to_restore = self.model.get_variables_to_restore(var_keep_dic)
+
+            restorer = tf.train.Saver(variables_to_restore)
+            restorer.restore(self.sess, args.pretrained_model)
+            print('Loaded.')
+
         self.epoch_start_index = 0
         self.batch_start_index = 0
 
@@ -100,6 +109,17 @@ class Trainer(object):
     #     print("Restored global step: %d" % step_restored)
     #     print("Restored epoch: %d" % self.epoch_start_index)
     #     print("Restored batch_start_index: %d" % self.batch_start_index)
+
+    def get_variables_in_checkpoint_file(self, file_name):
+        try:
+            reader = tf.pywrap_tensorflow.NewCheckpointReader(file_name)
+            var_to_shape_map = reader.get_variable_to_shape_map()
+            return var_to_shape_map
+        except Exception as e:  # pylint: disable=broad-except
+            print(str(e))
+            if "corrupted compressed block contents" in str(e):
+                print("It's likely that your checkpoint file has been compressed "
+                      "with SNAPPY.")
 
     def _train(self):
         imgs, score_maps, geo_maps, text_roi_count, affine_matrixs, affine_rects, labels, img_paths = \

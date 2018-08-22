@@ -268,10 +268,20 @@ class ResNetV2(Network):
             resnet_v2_block('block4', base_depth=512, num_units=3, stride=1)
         ]
 
-        net, end_points = resnet_v2(inputs, blocks, is_training=is_training,
-                                    global_pool=False, include_root_block=True,
-                                    scope=self._scope)
-        return net, end_points
+        net, self.end_points = resnet_v2(inputs, blocks, is_training=is_training,
+                                         global_pool=False, include_root_block=True,
+                                         scope=self._scope)
+        return net, self.end_points
+
+    def get_variables_to_restore(self, var_keep_dic):
+        variables = tf.global_variables()
+        variables_to_restore = []
+        for v in variables:
+            n = v.name.split(':')[0]
+            if n in var_keep_dic:
+                print('Variables restored: %s' % v.name)
+                variables_to_restore.append(v)
+        return variables_to_restore
 
 
 if __name__ == '__main__':
@@ -292,5 +302,5 @@ if __name__ == '__main__':
     res_net.create_architecture()
     print_endpoints(res_net, img_file)
     for k, v in res_net.end_points.items():
-        stride = int(641/v.shape.as_list()[2])
+        stride = int(641 / v.shape.as_list()[2])
         print("%s, stride %d, shape %s" % (k, stride, v.shape.as_list()))
