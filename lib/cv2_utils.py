@@ -37,9 +37,11 @@ def get_min_area_rect(line):
 
     # https://stackoverflow.com/questions/15956124/minarearect-angles-unsure-about-the-angle-returned
     # opencv 返回的 angle，取值范围为 [-90, 0)
-    # -90 代表没有旋转，有两条边水平，两条边竖直
-    # 角度增加代表顺时针旋转
-    # 变换到 [-45, 45)
+    # -90 代表没有旋转，有两条边水平，两条边竖直,角度增加代表顺时针旋转
+
+    # https://blog.csdn.net/a553654745/article/details/45743063
+    # 与x轴平行的方向为角度为0，逆时针旋转角度为负，顺时针旋转角度为正，
+    # angle 是水平轴（x轴）逆时针旋转，与碰到的第一个边的夹角，所以 angle 一定是负的
     angle = np.deg2rad(rect[2] + 45.)
 
     # 获得最小 rotate rect 的四个角点

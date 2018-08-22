@@ -1,5 +1,5 @@
 epochs: 10
-batch_size: 10
+batch_size: 14
 
 lr: 1.0
 lr_decay_epochs:

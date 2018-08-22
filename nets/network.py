@@ -179,12 +179,13 @@ class Network(object):
         :param y_pred_geo: prediction of geometry
         :return:
         '''
-        # classification_loss = self._dice_coefficient(y_true_cls, y_pred_cls)
+        cls_loss = self._dice_coefficient(y_true_cls, self.F_score)
+        # cls_loss *= 0.01
 
         # FOST 论文里的分类 loss，交叉熵
-        cls_loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=self.input_score_maps * self.input_training_mask,
-                                                           logits=self.F_score_logits * self.input_training_mask)
-        cls_loss = tf.reduce_mean(cls_loss)
+        # cls_loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=self.input_score_maps * self.input_training_mask,
+        #                                                    logits=self.F_score_logits * self.input_training_mask)
+        # cls_loss = tf.reduce_mean(cls_loss)
 
         # d1 -> top, d2->right, d3->bottom, d4->left
         d1_gt, d2_gt, d3_gt, d4_gt, theta_gt = tf.split(value=y_true_geo, num_or_size_splits=5, axis=3)
@@ -195,11 +196,11 @@ class Network(object):
         h_union = tf.minimum(d1_gt, d1_pred) + tf.minimum(d3_gt, d3_pred)
         area_intersect = w_union * h_union
         area_union = area_gt + area_pred - area_intersect
-        L_AABB = -tf.log((area_intersect + 1.0) / (area_union + 1.0))
 
+        L_AABB = -tf.log((area_intersect + 1.0) / (area_union + 1.0))
         L_theta = 1 - tf.cos(theta_pred - theta_gt)
 
-        L_g = tf.reduce_mean((L_AABB + 10 * L_theta) * self.input_score_maps * self.input_training_mask)
+        L_g = tf.reduce_mean((L_AABB + 20 * L_theta) * self.input_score_maps * self.input_training_mask)
 
         self.detect_cls_loss = cls_loss
         self.detect_reg_loss = L_g
@@ -217,8 +218,9 @@ class Network(object):
         :return:
         """
         eps = 1e-5
-        intersection = tf.reduce_sum(y_true_cls * y_pred_cls)
-        union = tf.reduce_sum(y_true_cls) + tf.reduce_sum(y_pred_cls) + eps
+        intersection = tf.reduce_sum(y_true_cls * y_pred_cls * self.input_training_mask)
+        union = tf.reduce_sum(y_true_cls * self.input_training_mask) + tf.reduce_sum(
+            y_pred_cls * self.input_training_mask) + eps
         loss = 1. - (2 * intersection / union)
         tf.summary.scalar('classification_dice_loss', loss)
         return loss
