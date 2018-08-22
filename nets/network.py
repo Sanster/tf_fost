@@ -75,8 +75,7 @@ class Network(object):
         self.reco_logits = self._build_reco_output(rois, self.seq_len, self.num_classes)
 
     def _build_losses(self):
-        self.detect_loss = self._build_detect_loss(self.input_score_maps, self.F_score,
-                                                   self.input_geo_maps, self.F_geometry)
+        self._build_detect_loss(self.input_score_maps, self.input_geo_maps, self.F_geometry)
 
         self.reco_ctc_loss = self._build_reco_loss(self.reco_logits, self.input_text_labels, self.seq_len)
 
@@ -91,23 +90,20 @@ class Network(object):
         tf.summary.scalar('total_loss', self.total_loss)
 
     def _build_detect_output(self, shared_conv):
-        F_score = slim.conv2d(shared_conv, 1, 1, activation_fn=tf.nn.sigmoid, normalizer_fn=None)
+        self.F_score_logits = slim.conv2d(shared_conv, 1, 1, activation_fn=None, normalizer_fn=None)
+        F_score = tf.nn.sigmoid(self.F_score_logits)
+
         print("F_score shape")
         print(F_score)
 
-        # 4 channel of axis aligned bbox and 1 channel rotation angle
-        # TODO: why x 512?
-        # geo_map = slim.conv2d(shared_conv, 4, 1, activation_fn=tf.nn.sigmoid,
-        #                       normalizer_fn=None) * 512
+        # geo_map 的 ground truth 算的是某像素点到四边的距离占长宽的比例，所以这里要用 sigmoid 限制到 (0,1)
+        geo_map = slim.conv2d(shared_conv, 4, 1, activation_fn=tf.nn.sigmoid, normalizer_fn=None)
 
-        geo_map = slim.conv2d(shared_conv, 4, 1, activation_fn=tf.nn.sigmoid,
-                              normalizer_fn=None) * 512
         print("geo_map shape")
         print(geo_map)
 
-        # angle is between [-45, 45]
-        angle_map = (slim.conv2d(shared_conv, 1, 1, activation_fn=tf.nn.sigmoid,
-                                 normalizer_fn=None) - 0.5) * np.pi / 2
+        # 要限制 angle 的范围为 [-45, 45]，所以要加 sigmoid
+        angle_map = (slim.conv2d(shared_conv, 1, 1, activation_fn=tf.nn.sigmoid, normalizer_fn=None) - 0.5) * np.pi / 2
         print("angle_map shape")
         print(angle_map)
 
@@ -171,13 +167,12 @@ class Network(object):
             rois_width.set_shape([None])
         return rois, rois_width
 
-    def _build_detect_loss(self, y_true_cls, y_pred_cls, y_true_geo, y_pred_geo):
+    def _build_detect_loss(self, y_true_cls, y_true_geo, y_pred_geo):
         '''
         define the loss used for training, contraning two part,
         the first part we use dice loss instead of weighted logloss,
         the second part is the iou loss defined in the paper
         :param y_true_cls: ground truth of text
-        :param y_pred_cls: prediction os text
         :param y_true_geo: ground truth of geometry
         :param y_pred_geo: prediction of geometry
         :return:
@@ -185,8 +180,8 @@ class Network(object):
         # classification_loss = self._dice_coefficient(y_true_cls, y_pred_cls)
 
         # FOST 论文里的分类 loss，交叉熵
-        classification_loss = -y_true_cls * tf.log(y_pred_cls) - (1 - y_true_cls) * tf.log(1 - y_pred_cls)
-        classification_loss = tf.reduce_mean(classification_loss)
+        cls_loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=self.input_score_maps, logits=self.F_score_logits)
+        cls_loss = tf.reduce_mean(cls_loss)
 
         # d1 -> top, d2->right, d3->bottom, d4->left
         d1_gt, d2_gt, d3_gt, d4_gt, theta_gt = tf.split(value=y_true_geo, num_or_size_splits=5, axis=3)
@@ -203,12 +198,12 @@ class Network(object):
 
         L_g = tf.reduce_mean(L_AABB + 10 * L_theta)
 
-        self.detect_cls_loss = classification_loss
+        self.detect_cls_loss = cls_loss
         self.detect_reg_loss = L_g
+        self.detect_loss = L_g + cls_loss
+
         tf.summary.scalar('geometry_AABB', tf.reduce_mean(L_AABB * y_true_cls))
         tf.summary.scalar('geometry_theta', tf.reduce_mean(L_theta * y_true_cls))
-
-        return L_g + classification_loss
 
     def _dice_coefficient(self, y_true_cls, y_pred_cls):
         """
