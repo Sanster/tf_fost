@@ -76,11 +76,11 @@ class Trainer(object):
                 # else:
                 #     batch_cost, global_step, lr = self._train()
 
-                print("{:.02f}s, epoch: {}, batch: {}/{}, total_loss: {:.03}, "
-                      "detect_loss: {:.03}, detect_cls_loss: {:.03}, detect_reg_loss: {:.03}, "
-                      "reco_loss: {:.03},  lr: {:.05}"
+                print("{:.02f}s, epoch: {}, batch: {}/{}, total_loss: {:.03}, reco_loss: {:.03}, "
+                      "detect_loss (total: {:.03}, cls: {:.03}, reg: {:.03}), "
+                      "lr: {:.05}"
                       .format(time.time() - batch_start_time, epoch, batch, self.tr_ds.num_batches,
-                              total_cost, detect_loss, detect_cls_loss, detect_reg_loss, reco_loss, lr))
+                              total_cost, reco_loss, detect_loss, detect_cls_loss, detect_reg_loss, lr))
 
                 # if global_step != 0 and (global_step % self.args.val_step == 0):
                 #     val_acc = self._do_val(self.val_ds, epoch, global_step, "val")

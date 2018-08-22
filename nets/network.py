@@ -182,9 +182,11 @@ class Network(object):
         :param y_pred_geo: prediction of geometry
         :return:
         '''
-        classification_loss = self._dice_coefficient(y_true_cls, y_pred_cls)
-        # scale classification loss to match the iou loss part
-        # classification_loss *= 0.01
+        # classification_loss = self._dice_coefficient(y_true_cls, y_pred_cls)
+
+        # FOST 论文里的分类 loss，交叉熵
+        classification_loss = -y_true_cls * tf.log(y_pred_cls) - (1 - y_true_cls) * tf.log(1 - y_pred_cls)
+        classification_loss = tf.reduce_mean(classification_loss)
 
         # d1 -> top, d2->right, d3->bottom, d4->left
         d1_gt, d2_gt, d3_gt, d4_gt, theta_gt = tf.split(value=y_true_geo, num_or_size_splits=5, axis=3)
@@ -196,14 +198,15 @@ class Network(object):
         area_intersect = w_union * h_union
         area_union = area_gt + area_pred - area_intersect
         L_AABB = -tf.log((area_intersect + 1.0) / (area_union + 1.0))
+
         L_theta = 1 - tf.cos(theta_pred - theta_gt)
-        tf.summary.scalar('geometry_AABB', tf.reduce_mean(L_AABB * y_true_cls))
-        tf.summary.scalar('geometry_theta', tf.reduce_mean(L_theta * y_true_cls))
 
         L_g = tf.reduce_mean(L_AABB + 10 * L_theta)
 
         self.detect_cls_loss = classification_loss
         self.detect_reg_loss = L_g
+        tf.summary.scalar('geometry_AABB', tf.reduce_mean(L_AABB * y_true_cls))
+        tf.summary.scalar('geometry_theta', tf.reduce_mean(L_theta * y_true_cls))
 
         return L_g + classification_loss
 
