@@ -1,4 +1,5 @@
 from scipy.spatial import distance as dist
+import math
 import cv2
 import numpy as np
 
@@ -33,7 +34,13 @@ def get_min_area_rect(line):
         矩形四点坐标的顺序： left-top, right-top, right-bottom, left-bottom
     """
     rect = cv2.minAreaRect(line)
-    angle = rect[2]
+
+    # https://stackoverflow.com/questions/15956124/minarearect-angles-unsure-about-the-angle-returned
+    # opencv 返回的 angle，取值范围为 [-90, 0)
+    # -90 代表没有旋转，有两条边水平，两条边竖直
+    # 角度增加代表顺时针旋转
+    # 变换到 [-45, 45)
+    angle = np.deg2rad(rect[2] + 45.)
 
     # 获得最小 rotate rect 的四个角点
     box = cv2.boxPoints(rect)
@@ -82,4 +89,3 @@ def clockwise_points(pnts):
     # return the coordinates in top-left, top-right,
     # bottom-right, and bottom-left order
     return np.array([tl, tr, br, bl], dtype="float32")
-
