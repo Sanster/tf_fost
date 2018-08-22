@@ -42,8 +42,11 @@ def parse_args(infer=False):
     parser.add_argument('--val_step', type=int, default=2000, help='Steps to do val.test and save checkpoint')
     parser.add_argument('--log_step', type=int, default=30, help='Steps save tensorflow summary')
 
-    parser.add_argument('--train_dir', default='/home/cwq/data/MLT2017/fost')
-    parser.add_argument('--train_gt_dir', default='/home/cwq/data/MLT2017/fost_gt')
+    # parser.add_argument('--train_dir', default='/home/cwq/data/MLT2017/fost')
+    # parser.add_argument('--train_gt_dir', default='/home/cwq/data/MLT2017/fost_gt')
+    parser.add_argument('--train_dir', default='/home/cwq/data/ocr/IC15/ch4_training_images')
+    parser.add_argument('--train_gt_dir', default='/home/cwq/data/ocr/IC15/ch4_training_localization_transcription_gt')
+
     parser.add_argument('--val_dir', default=None, help='Directory store validation images and labels')
     parser.add_argument('--test_dir', default=None, help='Directory store test images and labels')
     parser.add_argument('--cfg_name', default='default')

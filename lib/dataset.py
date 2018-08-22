@@ -9,7 +9,7 @@ import numpy as np
 
 from lib import cv2_utils
 from lib.cv2_utils import get_min_area_rect, clockwise_points
-from lib.icdar_utils import load_mlt_gt, get_ltrb, get_ltrb_by4vec
+from lib.icdar_utils import load_ic15_gt, load_mlt_gt, get_ltrb, get_ltrb_by4vec
 
 # noinspection PyMethodMayBeStatic
 from lib.label_converter import LabelConverter
@@ -128,7 +128,8 @@ class Dataset:
         if DEBUG:
             print(img_path)
 
-        mlt_gts = load_mlt_gt(gt_path)
+        # gts = load_mlt_gt(gt_path)
+        gts = load_ic15_gt(gt_path)
 
         img = cv2.imread(img_path)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
@@ -142,7 +143,7 @@ class Dataset:
         xscale = self.cfg.train.croped_img_size / img.shape[1]
         yscale = self.cfg.train.croped_img_size / img.shape[0]
 
-        for gt in mlt_gts:
+        for gt in gts:
             # scale
             gt[0][:, 0] = (gt[0][:, 0] * xscale).astype(np.int32)
             gt[0][:, 1] = (gt[0][:, 1] * yscale).astype(np.int32)
@@ -160,19 +161,19 @@ class Dataset:
         # if min(img.shape[0], img.shape[1]) < self.cfg.train.croped_img_size:
         #     img_croped = img
         # else:
-        #     img_croped, mlt_gts = self._crop_img(img, mlt_gts)
+        #     img_croped, gts = self._crop_img(img, gts)
 
         if DEBUG:
-            for gt in mlt_gts:
+            for gt in gts:
                 gt[0] = gt[0].astype(np.int32)
                 img = cv2_utils.draw_four_vectors(img, gt[0])
             bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
             cv2.imwrite('test.jpg', bgr)
 
-        score_map, geo_map, training_mask = self.generate_rbox(img.shape, mlt_gts)
+        score_map, geo_map, training_mask = self.generate_rbox(img.shape, gts)
 
         valid_text_count = 0
-        for gt in mlt_gts:
+        for gt in gts:
             ignore = gt[-1]
             if not ignore:
                 # Ground true label data for CRNN
@@ -186,7 +187,7 @@ class Dataset:
         affine_rects = np.zeros((valid_text_count, 4), np.int32)
 
         count = 0
-        for gt in mlt_gts:
+        for gt in gts:
             ignore = gt[-1]
             if not ignore:
                 # Ground true label data for CRNN
@@ -276,15 +277,15 @@ class Dataset:
         # print(rect)
         return M, rect
 
-    def _crop_img(self, img, mlt_gts):
+    def _crop_img(self, img, gts):
         """
         使用窗口在图片上滑动，窗口不能把文字截断，窗口必须包含文字
         :param img:
-        :param mlt_gts: [((x1,y1,x2,y2,x3,y3,x4,y4),language,text,ignore)]
+        :param gts: [((x1,y1,x2,y2,x3,y3,x4,y4),language,text,ignore)]
         :return:
         """
         # 先根据 polys 计算出 bounding box
-        ltrb_gts = [(get_ltrb(g[0]).astype(np.int32), g[3]) for g in mlt_gts]
+        ltrb_gts = [(get_ltrb(g[0]).astype(np.int32), g[3]) for g in gts]
 
         # 因为滑窗的尺寸是定的，所以这里只计算滑窗左上角点的取值范围
         # 用来记录图像上的每一个像素是否可以所谓 left-top 点
@@ -298,7 +299,7 @@ class Dataset:
         if DEBUG:
             cv2.imwrite('test.jpg', corner_map * 255)
 
-        return img, mlt_gts
+        return img, gts
 
     def generate_rbox(self, im_size, gts):
         """
@@ -505,8 +506,10 @@ if __name__ == "__main__":
     cfg = load_config()
     ds = Dataset(
         cfg,
-        img_dir='/home/cwq/data/MLT2017/val',
-        gt_dir='/home/cwq/data/MLT2017/val_gt',
+        # img_dir='/home/cwq/data/MLT2017/val',
+        # gt_dir='/home/cwq/data/MLT2017/val_gt',
+        img_dir='/home/cwq/data/ocr/IC15/ch4_training_images',
+        gt_dir='/home/cwq/data/ocr/IC15/ch4_training_localization_transcription_gt',
         converter=converter,
         batch_size=6,
         num_parallel_calls=1,

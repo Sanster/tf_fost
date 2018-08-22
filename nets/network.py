@@ -98,7 +98,8 @@ class Network(object):
         print(F_score)
 
         # geo_map 的 ground truth 算的是某像素点到四边的距离占长宽的比例，所以这里要用 sigmoid 限制到 (0,1)
-        geo_map = slim.conv2d(shared_conv, 4, 1, activation_fn=tf.nn.sigmoid, normalizer_fn=None)
+        # TODO: why * text_scale(640)
+        geo_map = slim.conv2d(shared_conv, 4, 1, activation_fn=tf.nn.sigmoid, normalizer_fn=None) * 640
 
         print("geo_map shape")
         print(geo_map)
