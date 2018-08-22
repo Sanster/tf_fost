@@ -122,7 +122,7 @@ class Trainer(object):
                       "with SNAPPY.")
 
     def _train(self):
-        imgs, score_maps, geo_maps, text_roi_count, affine_matrixs, affine_rects, labels, img_paths = \
+        imgs, score_maps, geo_maps, training_mask, text_roi_count, affine_matrixs, affine_rects, labels, img_paths = \
             self.tr_ds.get_next_batch(self.sess)
 
         # print(imgs.shape)
@@ -147,6 +147,7 @@ class Trainer(object):
             self.model.input_images: imgs,
             self.model.input_score_maps: score_maps,
             self.model.input_geo_maps: geo_maps,
+            self.model.input_training_mask: training_mask,
             self.model.input_text_roi_count: text_roi_count,
             self.model.input_affine_matrixs: affine_matrixs,
             self.model.input_affine_rects: affine_rects,

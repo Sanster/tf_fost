@@ -39,6 +39,7 @@ class Network(object):
         self.input_images = tf.placeholder(tf.float32, shape=[None, 641, 641, 3], name='input_images')
         self.input_score_maps = tf.placeholder(tf.float32, shape=[None, None, None, 1], name='input_score_maps')
         self.input_geo_maps = tf.placeholder(tf.float32, shape=[None, None, None, 5], name='input_geo_maps')
+        self.input_training_mask = tf.placeholder(tf.float32, shape=[None, None, None, 1], name='input_training_mask')
 
         # num_of_text_roi for each image
         self.input_text_roi_count = tf.placeholder(tf.int32, shape=[None, 1], name='input_text_roi_count')
@@ -180,7 +181,8 @@ class Network(object):
         # classification_loss = self._dice_coefficient(y_true_cls, y_pred_cls)
 
         # FOST 论文里的分类 loss，交叉熵
-        cls_loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=self.input_score_maps, logits=self.F_score_logits)
+        cls_loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=self.input_score_maps * self.input_training_mask,
+                                                           logits=self.F_score_logits * self.input_training_mask)
         cls_loss = tf.reduce_mean(cls_loss)
 
         # d1 -> top, d2->right, d3->bottom, d4->left
@@ -196,14 +198,14 @@ class Network(object):
 
         L_theta = 1 - tf.cos(theta_pred - theta_gt)
 
-        L_g = tf.reduce_mean(L_AABB + 10 * L_theta)
+        L_g = tf.reduce_mean((L_AABB + 10 * L_theta) * self.input_score_maps * self.input_training_mask)
 
         self.detect_cls_loss = cls_loss
         self.detect_reg_loss = L_g
         self.detect_loss = L_g + cls_loss
 
-        tf.summary.scalar('geometry_AABB', tf.reduce_mean(L_AABB * y_true_cls))
-        tf.summary.scalar('geometry_theta', tf.reduce_mean(L_theta * y_true_cls))
+        tf.summary.scalar('geometry_AABB', tf.reduce_mean(L_AABB * y_true_cls * self.input_training_mask))
+        tf.summary.scalar('geometry_theta', tf.reduce_mean(L_theta * y_true_cls * self.input_training_mask))
 
     def _dice_coefficient(self, y_true_cls, y_pred_cls):
         """

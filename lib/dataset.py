@@ -56,7 +56,7 @@ class Dataset:
         return base_names
 
     def get_next_batch(self, sess):
-        imgs, score_maps, geo_maps, text_roi_count, affine_matrixs, affine_rects, labels, img_paths = sess.run(
+        imgs, score_maps, geo_maps, training_mask, text_roi_count, affine_matrixs, affine_rects, labels, img_paths = sess.run(
             self.next_batch)
 
         if DEBUG:
@@ -81,7 +81,7 @@ class Dataset:
         for p in img_paths:
             batch_img_paths.append(p[0])
 
-        return imgs, score_maps, geo_maps, text_roi_count, affine_matrixs, affine_rects, sparse_labels, batch_img_paths
+        return imgs, score_maps, geo_maps, training_mask, text_roi_count, affine_matrixs, affine_rects, sparse_labels, batch_img_paths
 
     def _create_dataset(self):
         tf_base_names = tf.convert_to_tensor(self.base_names, dtype=dtypes.string)
@@ -95,14 +95,15 @@ class Dataset:
             d = d.shuffle(buffer_size=self.size)
 
         d = d.map(lambda base_name: tf.py_func(self._input_py_parser, [base_name],
-                                               [tf.uint8, tf.float32, tf.float32, tf.int64, tf.float64, tf.int32,
-                                                tf.string, tf.string]))
+                                               [tf.uint8, tf.float32, tf.float32, tf.uint8, tf.int64, tf.float64,
+                                                tf.int32, tf.string, tf.string]))
 
         # d = d.batch(self.batch_size)
         d = d.padded_batch(self.batch_size,
                            padded_shapes=([self.cfg.train.croped_img_size, self.cfg.train.croped_img_size, 3],
                                           [160, 160, 1],
                                           [160, 160, 5],
+                                          [160, 160, 1],
                                           [1],
                                           [None, 2, 3],
                                           [None, 4],
@@ -168,7 +169,7 @@ class Dataset:
             bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
             cv2.imwrite('test.jpg', bgr)
 
-        score_map, geo_map = self.generate_rbox(img.shape, mlt_gts)
+        score_map, geo_map, training_mask = self.generate_rbox(img.shape, mlt_gts)
 
         valid_text_count = 0
         for gt in mlt_gts:
@@ -205,7 +206,8 @@ class Dataset:
             print(affine_matrixs.shape)
             print(affine_rects.shape)
 
-        return img, score_map, geo_map, [valid_text_count], affine_matrixs, affine_rects, labels, [img_path]
+        return img, score_map, geo_map, training_mask, [valid_text_count], affine_matrixs, affine_rects, labels, [
+            img_path]
 
     def _get_affine_M(self, poly, stride=4, fix_height=8):
         """
@@ -306,6 +308,7 @@ class Dataset:
             score_map: poly 所占区域的文字区域为 1，其他地方为 0. [height, width]
             geo_map: poly 中 每一个像素点到 minAreaRect 的四边的距离. [height, width, 5]
                      如果像素点不在 poly 中则都为 0
+            training_mask: 计算 detect loss 时忽略文字较小或者模糊的区域
         """
         w = im_size[1]
         h = im_size[0]
@@ -313,6 +316,7 @@ class Dataset:
         poly_mask = np.zeros((h, w), dtype=np.uint8)
         score_map = np.zeros((h, w), dtype=np.uint8)
         geo_map = np.zeros((h, w, 5), dtype=np.float32)
+        training_mask = np.ones((h, w), dtype=np.uint8)
 
         if DEBUG:
             unshrink_score_map = np.zeros((h, w), dtype=np.uint8)
@@ -321,6 +325,9 @@ class Dataset:
             poly = gt[0]
             ignore = gt[-1]
             if ignore:
+                cv2.fillPoly(training_mask, [poly], 0)
+                if DEBUG:
+                    cv2.imwrite('training_mask.jpg', training_mask)
                 continue
 
             # score map
@@ -350,12 +357,14 @@ class Dataset:
         # TODO: why this is right?
         score_map = score_map[::4, ::4, np.newaxis].astype(np.float32)
         geo_map = geo_map[::4, ::4, :].astype(np.float32)
+        training_mask = training_mask[::4, ::4, np.newaxis].astype(np.uint8)
 
         # TODO: rewrite this
         score_map = score_map[:160, :160, :]
         geo_map = geo_map[:160, :160, :]
+        training_mask = training_mask[:160, :160, :]
 
-        return score_map, geo_map
+        return score_map, geo_map, training_mask
 
     # https://github.com/argman/EAST/issues/160
     def _calculate_geo_map(self, geo_map, xy_in_poly, rectange, rotate_angle):
