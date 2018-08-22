@@ -106,6 +106,10 @@ class Network(object):
 
         # 要限制 angle 的范围为 [-45, 45]，所以要加 sigmoid
         angle_map = (slim.conv2d(shared_conv, 1, 1, activation_fn=tf.nn.sigmoid, normalizer_fn=None) - 0.5) * np.pi / 2
+
+        # [ -90, 0)
+        # angle_map = - slim.conv2d(shared_conv, 1, 1, activation_fn=tf.nn.sigmoid, normalizer_fn=None) * np.pi / 2
+
         print("angle_map shape")
         print(angle_map)
 

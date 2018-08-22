@@ -203,6 +203,7 @@ if __name__ == "__main__":
         print(rbox)
 
         angle = rbox[1]
+        print(angle)
         rect = rbox[0]
         roi_cy = int((rbox[0][0][1] + rbox[0][2][1]) / 2)
         roi_cx = int((rbox[0][0][0] + rbox[0][2][0]) / 2)

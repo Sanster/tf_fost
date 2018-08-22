@@ -42,7 +42,7 @@ def roi_rotate_layer(share_conv, fix_height, text_roi_count, affine_matrixs, aff
         for k in range(text_count):
             M = affine_matrixs[i][k]
             rect = affine_rects[i][k]
-            affine_img = cv2.warpAffine(img, M, (w, h))
+            affine_img = cv2.warpAffine(img, M, (w, h), flags=cv2.INTER_LINEAR)
             rois[count][:, 0:rect[2] - rect[0]] = affine_img[rect[1]: rect[3], rect[0]:rect[2]]
             count += 1
 
