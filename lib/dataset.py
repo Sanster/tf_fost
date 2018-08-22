@@ -180,7 +180,7 @@ class Dataset:
                     continue
                 valid_text_count += 1
 
-        labels = []
+        labels = [""]
         affine_matrixs = np.zeros((valid_text_count, 2, 3), np.float64)
         affine_rects = np.zeros((valid_text_count, 4), np.int32)
 
@@ -300,7 +300,6 @@ class Dataset:
 
     def generate_rbox(self, im_size, gts):
         """
-        TODO: shrink poly
         :param im_size:
         :param gts:
         :return:
@@ -315,18 +314,26 @@ class Dataset:
         score_map = np.zeros((h, w), dtype=np.uint8)
         geo_map = np.zeros((h, w, 5), dtype=np.float32)
 
+        if DEBUG:
+            unshrink_score_map = np.zeros((h, w), dtype=np.uint8)
+
         for idx, gt in enumerate(gts):
             poly = gt[0]
             ignore = gt[-1]
             if ignore:
                 continue
 
-            cv2.fillPoly(score_map, [poly], 1)
+            # score map
+            shrinked_poly = self.shrink_poly(poly.copy()).astype(np.int32)
+
+            cv2.fillPoly(score_map, [shrinked_poly], 1)
 
             if DEBUG:
+                cv2.fillPoly(unshrink_score_map, [poly], 1)
                 cv2.imwrite('score_map.jpg', score_map * 255)
+                cv2.imwrite('unshrink_score_map.jpg', unshrink_score_map * 255)
 
-            cv2.fillPoly(poly_mask, [poly], idx + 1)
+            cv2.fillPoly(poly_mask, [shrinked_poly], idx + 1)
             xy_in_poly = np.argwhere(poly_mask == (idx + 1))
 
             rbox = get_min_area_rect(poly)
@@ -410,6 +417,75 @@ class Dataset:
 
         return indices, values, shape
 
+    def shrink_poly(self, poly, R=0.3):
+        """
+        fit a poly inside the origin poly, maybe bugs here...
+        used for generate the score map
+        :param poly: the text poly
+        :param R: shrink radio
+        :return: the shrinked poly
+        """
+        r = [None, None, None, None]
+        for i in range(4):
+            r[i] = min(np.linalg.norm(poly[i] - poly[(i + 1) % 4]),
+                       np.linalg.norm(poly[i] - poly[(i - 1) % 4]))
+
+        # find the longer pair
+        if np.linalg.norm(poly[0] - poly[1]) + np.linalg.norm(poly[2] - poly[3]) > \
+                np.linalg.norm(poly[0] - poly[3]) + np.linalg.norm(poly[1] - poly[2]):
+            # first move (p0, p1), (p2, p3), then (p0, p3), (p1, p2)
+            ## p0, p1
+            theta = np.arctan2((poly[1][1] - poly[0][1]), (poly[1][0] - poly[0][0]))
+            poly[0][0] += R * r[0] * np.cos(theta)
+            poly[0][1] += R * r[0] * np.sin(theta)
+            poly[1][0] -= R * r[1] * np.cos(theta)
+            poly[1][1] -= R * r[1] * np.sin(theta)
+            ## p2, p3
+            theta = np.arctan2((poly[2][1] - poly[3][1]), (poly[2][0] - poly[3][0]))
+            poly[3][0] += R * r[3] * np.cos(theta)
+            poly[3][1] += R * r[3] * np.sin(theta)
+            poly[2][0] -= R * r[2] * np.cos(theta)
+            poly[2][1] -= R * r[2] * np.sin(theta)
+            ## p0, p3
+            theta = np.arctan2((poly[3][0] - poly[0][0]), (poly[3][1] - poly[0][1]))
+            poly[0][0] += R * r[0] * np.sin(theta)
+            poly[0][1] += R * r[0] * np.cos(theta)
+            poly[3][0] -= R * r[3] * np.sin(theta)
+            poly[3][1] -= R * r[3] * np.cos(theta)
+            ## p1, p2
+            theta = np.arctan2((poly[2][0] - poly[1][0]), (poly[2][1] - poly[1][1]))
+            poly[1][0] += R * r[1] * np.sin(theta)
+            poly[1][1] += R * r[1] * np.cos(theta)
+            poly[2][0] -= R * r[2] * np.sin(theta)
+            poly[2][1] -= R * r[2] * np.cos(theta)
+        else:
+            ## p0, p3
+            # print poly
+            theta = np.arctan2((poly[3][0] - poly[0][0]), (poly[3][1] - poly[0][1]))
+            poly[0][0] += R * r[0] * np.sin(theta)
+            poly[0][1] += R * r[0] * np.cos(theta)
+            poly[3][0] -= R * r[3] * np.sin(theta)
+            poly[3][1] -= R * r[3] * np.cos(theta)
+            ## p1, p2
+            theta = np.arctan2((poly[2][0] - poly[1][0]), (poly[2][1] - poly[1][1]))
+            poly[1][0] += R * r[1] * np.sin(theta)
+            poly[1][1] += R * r[1] * np.cos(theta)
+            poly[2][0] -= R * r[2] * np.sin(theta)
+            poly[2][1] -= R * r[2] * np.cos(theta)
+            ## p0, p1
+            theta = np.arctan2((poly[1][1] - poly[0][1]), (poly[1][0] - poly[0][0]))
+            poly[0][0] += R * r[0] * np.cos(theta)
+            poly[0][1] += R * r[0] * np.sin(theta)
+            poly[1][0] -= R * r[1] * np.cos(theta)
+            poly[1][1] -= R * r[1] * np.sin(theta)
+            ## p2, p3
+            theta = np.arctan2((poly[2][1] - poly[3][1]), (poly[2][0] - poly[3][0]))
+            poly[3][0] += R * r[3] * np.cos(theta)
+            poly[3][1] += R * r[3] * np.sin(theta)
+            poly[2][0] -= R * r[2] * np.cos(theta)
+            poly[2][1] -= R * r[2] * np.sin(theta)
+        return poly
+
 
 if __name__ == "__main__":
     converter = LabelConverter(chars_file='./data/chars/eng.txt')
@@ -429,7 +505,7 @@ if __name__ == "__main__":
 
     with tf.Session() as sess:
         ds.init_op.run()
-        imgs, _, _, _, affine_matrixs, _, _ = ds.get_next_batch(sess)
+        ds.get_next_batch(sess)
 
     # model = ResNetV2(cfg, converter.num_classes)
     # model.create_architecture()
