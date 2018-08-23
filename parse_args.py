@@ -40,7 +40,7 @@ def parse_args(infer=False):
     parser.add_argument('--chars_file', default='./data/chars/eng.txt')
 
     parser.add_argument('--val_step', type=int, default=2000, help='Steps to do val.test and save checkpoint')
-    parser.add_argument('--log_step', type=int, default=30, help='Steps save tensorflow summary')
+    parser.add_argument('--log_step', type=int, default=10, help='Steps save tensorflow summary')
 
     # parser.add_argument('--train_dir', default='/home/cwq/data/MLT2017/fost')
     # parser.add_argument('--train_gt_dir', default='/home/cwq/data/MLT2017/fost_gt')
@@ -74,11 +74,14 @@ def parse_args(infer=False):
     args.ckpt_dir = os.path.join(args.ckpt_dir, args.tag)
     args.flags_fir = os.path.join(args.ckpt_dir, "flags")
     args.log_dir = os.path.join(args.log_dir, args.tag)
+    args.train_log_dir = os.path.join(args.log_dir, 'train')
+    args.val_log_dir = os.path.join(args.log_dir, 'val')
     args.result_dir = os.path.join(args.result_dir, args.tag)
 
     check_dir_exist(args.ckpt_dir)
     check_dir_exist(args.flags_fir)
-    check_dir_exist(args.log_dir)
+    check_dir_exist(args.train_log_dir)
+    check_dir_exist(args.val_log_dir)
     check_dir_exist(args.result_dir)
 
     save_flags(args, args.flags_fir)

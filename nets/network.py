@@ -58,6 +58,8 @@ class Network(object):
 
         self._build_train_op()
 
+        self.merged_summary = tf.summary.merge_all()
+
     def _build_network(self):
         # stride 4, channels 320
         self.shared_conv = self._build_share_conv()

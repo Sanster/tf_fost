@@ -67,7 +67,8 @@ class Trainer(object):
         self.sess.run(tf.global_variables_initializer())
 
         self.saver = tf.train.Saver(tf.global_variables(), max_to_keep=8)
-        self.train_writer = tf.summary.FileWriter(self.args.log_dir, self.sess.graph)
+        self.train_writer = tf.summary.FileWriter(self.args.train_log_dir, self.sess.graph)
+        self.val_writer = tf.summary.FileWriter(self.args.val_log_dir, self.sess.graph)
 
         # if self.args.restore:
         #     self._restore()
@@ -78,12 +79,13 @@ class Trainer(object):
 
             for batch in range(self.batch_start_index, self.tr_ds.num_batches):
                 batch_start_time = time.time()
-                total_cost, detect_loss, detect_cls_loss, detect_reg_loss, reco_loss, global_step, lr = self._train()
 
-                # if batch != 0 and (batch % self.args.log_step == 0):
-                #     batch_cost, global_step, lr = self._train_with_summary()
-                # else:
-                #     batch_cost, global_step, lr = self._train()
+                summary = False
+                if batch != 0 and (batch % self.args.log_step == 0):
+                    summary = True
+
+                total_cost, detect_loss, detect_cls_loss, detect_reg_loss, reco_loss, global_step, lr = self._train(
+                    summary=summary)
 
                 print("{:.02f}s, epoch: {}, batch: {}/{}, total_loss: {:.03}, reco_loss: {:.03}, "
                       "detect_loss (total: {:.03}, cls: {:.03}, reg: {:.03}), "
@@ -121,7 +123,7 @@ class Trainer(object):
                 print("It's likely that your checkpoint file has been compressed "
                       "with SNAPPY.")
 
-    def _train(self):
+    def _train(self, summary=False):
         imgs, score_maps, geo_maps, training_mask, text_roi_count, affine_matrixs, affine_rects, labels, img_paths = \
             self.tr_ds.get_next_batch(self.sess)
 
@@ -143,6 +145,9 @@ class Trainer(object):
             self.model.train_op
         ]
 
+        if summary:
+            fetches.insert(0, self.model.merged_summary)
+
         feed = {
             self.model.input_images: imgs,
             self.model.input_score_maps: score_maps,
@@ -155,12 +160,13 @@ class Trainer(object):
             self.model.is_training: True
         }
 
-        # try:
-        total_loss, detect_loss, detect_cls_loss, detect_reg_loss, reco_ctc_loss, global_step, lr, _ = self.sess.run(
-            fetches, feed)
-        # except:
-        #     print(img_paths)
-        #     exit(-1)
+        if summary:
+            summary, total_loss, detect_loss, detect_cls_loss, detect_reg_loss, reco_ctc_loss, global_step, lr, _ = self.sess.run(
+                fetches, feed)
+            self.train_writer.add_summary(summary, global_step)
+        else:
+            total_loss, detect_loss, detect_cls_loss, detect_reg_loss, reco_ctc_loss, global_step, lr, _ = self.sess.run(
+                fetches, feed)
 
         return total_loss, detect_loss, detect_cls_loss, detect_reg_loss, reco_ctc_loss, global_step, lr
 
