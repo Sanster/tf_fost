@@ -13,6 +13,11 @@ rnn_num_units: 256
 # if text's height is smaller then this value, ignore it
 min_text_height: 10
 
+# For image preprocessing: https://github.com/tensorflow/models/blob/master/research/slim/preprocessing/vgg_preprocessing.py
+R_MEAN: 123.68
+G_MEAN: 116.78
+B_MEAN: 103.94
+
 train:
   croped_img_size: 641
   share_conv_stride: 4

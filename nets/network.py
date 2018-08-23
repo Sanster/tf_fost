@@ -184,7 +184,7 @@ class Network(object):
         :return:
         '''
         cls_loss = self._dice_coefficient(y_true_cls, self.F_score)
-        # cls_loss *= 0.01
+        cls_loss *= 0.1
 
         # FOST 论文里的分类 loss，交叉熵
         # cls_loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=self.input_score_maps * self.input_training_mask,

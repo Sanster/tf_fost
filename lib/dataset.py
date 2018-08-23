@@ -50,6 +50,8 @@ class Dataset:
         self.next_batch = iterator.get_next()
         self.init_op = iterator.initializer
 
+        self.pixel_mean = np.array([[[self.cfg.R_MEAN, self.cfg.G_MEAN, self.cfg.B_MEAN]]])
+
     def _get_base_name(self, img_dir):
         img_paths = glob.glob(img_dir + '/*.*')
         base_names = [os.path.basename(p) for p in img_paths]
@@ -132,7 +134,9 @@ class Dataset:
         gts = load_ic15_gt(gt_path)
 
         img = cv2.imread(img_path)
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float64)
+        img -= self.pixel_mean
+        img = img.astype(np.uint8)
 
         # long_side_length = np.random.randint(640, 2560)
 
@@ -209,6 +213,10 @@ class Dataset:
 
         return img, score_map, geo_map, training_mask, [valid_text_count], affine_matrixs, affine_rects, labels, [
             img_path]
+
+    def _get_affine_M2(self):
+        # TODO use method in paper to cal M
+        pass
 
     def _get_affine_M(self, poly, stride=4, fix_height=8):
         """
