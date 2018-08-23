@@ -171,7 +171,9 @@ class Dataset:
             for gt in gts:
                 gt[0] = gt[0].astype(np.int32)
                 img = cv2_utils.draw_four_vectors(img, gt[0])
-            bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+            recoverd_img = img.astype(np.float64) + self.pixel_mean
+            recoverd_img = recoverd_img.astype(np.uint8)
+            bgr = cv2.cvtColor(recoverd_img, cv2.COLOR_RGB2BGR)
             cv2.imwrite('test.jpg', bgr)
 
         score_map, geo_map, training_mask = self.generate_rbox(img.shape, gts)
@@ -336,7 +338,7 @@ class Dataset:
             if ignore:
                 cv2.fillPoly(training_mask, [poly], 0)
                 if DEBUG:
-                    cv2.imwrite('training_mask.jpg', training_mask)
+                    cv2.imwrite('training_mask.jpg', training_mask * 255)
                 continue
 
             # score map
