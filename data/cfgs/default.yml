@@ -1,12 +1,20 @@
-epochs: 10
+epochs: 600
 batch_size: 14
 
-lr: 1.0
+lr: 0.0001
+# piece / exp
+lr_decay_method: 'exp'
+lr_decay_rate: 0.9
+
+# for exp method
+lr_decay_steps: 10000
+
+# for piece method
 lr_decay_epochs:
   - 3
   - 6
-lr_decay_rate: 0.5
 
+# For Rnn
 rnn_keep_prob: 1.0
 rnn_num_units: 256
 
@@ -22,4 +30,4 @@ train:
   croped_img_size: 641
   share_conv_stride: 4
   roi_rotate_fix_height: 8
-  optimizer: 'adadelate'
+  optimizer: 'adam'

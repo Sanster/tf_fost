@@ -23,9 +23,10 @@ from lib.roi_rotate_layer import roi_rotate_layer
 class Network(object):
     CTC_INVALID_INDEX = -1
 
-    def __init__(self, cfg, num_classes):
+    def __init__(self, cfg, num_classes, is_training=True):
         self.cfg = cfg
         self.num_classes = num_classes
+        self.is_training = is_training
 
     @abstractmethod
     def _image_to_head(self, inputs, is_training):
@@ -50,15 +51,14 @@ class Network(object):
 
         self.input_text_labels = tf.sparse_placeholder(tf.int32, name='input_text_labels')
 
-        self.is_training = tf.placeholder(tf.bool, name="is_training")
+        self.input_is_training = tf.placeholder(tf.bool, name="is_training")
 
         self._build_network()
 
-        self._build_losses()
-
-        self._build_train_op()
-
-        self.merged_summary = tf.summary.merge_all()
+        if self.is_training:
+            self._build_losses()
+            self._build_train_op()
+            self.merged_summary = tf.summary.merge_all()
 
     def _build_network(self):
         # stride 4, channels 320
@@ -69,26 +69,27 @@ class Network(object):
 
         self.F_score, self.F_geometry = self._build_detect_output(self.shared_conv)
 
-        rois, rois_width = self._roi_rotate_layer(self.shared_conv, self.input_text_roi_count,
-                                                  self.input_affine_matrixs, self.input_affine_rects,
-                                                  self.cfg.train.roi_rotate_fix_height)
-
-        self.seq_len = rois_width
-
-        self.reco_logits = self._build_reco_output(rois, self.seq_len, self.num_classes)
+        # rois, rois_width = self._roi_rotate_layer(self.shared_conv, self.input_text_roi_count,
+        #                                           self.input_affine_matrixs, self.input_affine_rects,
+        #                                           self.cfg.train.roi_rotate_fix_height)
+        #
+        # self.seq_len = rois_width
+        #
+        # self.reco_logits = self._build_reco_output(rois, self.seq_len, self.num_classes)
 
     def _build_losses(self):
         self._build_detect_loss(self.input_score_maps, self.input_geo_maps, self.F_geometry)
 
-        self.reco_ctc_loss = self._build_reco_loss(self.reco_logits, self.input_text_labels, self.seq_len)
+        # self.reco_ctc_loss = self._build_reco_loss(self.reco_logits, self.input_text_labels, self.seq_len)
 
         self.regularization_loss = tf.add_n(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
-        self.total_loss = self.detect_loss + self.reco_ctc_loss + self.regularization_loss
+        # self.total_loss = self.detect_loss + self.reco_ctc_loss + self.regularization_loss
+        self.total_loss = self.detect_loss + self.regularization_loss
 
         tf.summary.scalar('detect_loss', self.detect_loss)
         tf.summary.scalar('detect_cls_loss', self.detect_cls_loss)
         tf.summary.scalar('detect_reg_loss', self.detect_reg_loss)
-        tf.summary.scalar('reco_ctc_loss', self.reco_ctc_loss)
+        # tf.summary.scalar('reco_ctc_loss', self.reco_ctc_loss)
         tf.summary.scalar('regularization_loss', self.regularization_loss)
         tf.summary.scalar('total_loss', self.total_loss)
 
@@ -121,7 +122,14 @@ class Network(object):
 
     def _build_train_op(self):
         self.global_step = tf.Variable(0, trainable=False)
-        self.lr = tf.train.piecewise_constant(self.global_step, self.cfg.lr_boundaries, self.cfg.lr_values)
+
+        if self.cfg.lr_decay_method == 'piece':
+            self.lr = tf.train.piecewise_constant(self.global_step, self.cfg.lr_boundaries, self.cfg.lr_values)
+        elif self.cfg.lr_decay_method == 'exp':
+            self.lr = tf.train.exponential_decay(self.cfg.lr, self.global_step,
+                                                 decay_steps=self.cfg.lr_decay_steps,
+                                                 decay_rate=self.cfg.lr_decay_rate,
+                                                 staircase=True)
 
         tf.summary.scalar("learning_rate", self.lr)
 
@@ -186,7 +194,7 @@ class Network(object):
         :return:
         '''
         cls_loss = self._dice_coefficient(y_true_cls, self.F_score)
-        cls_loss *= 0.1
+        cls_loss *= 0.01
 
         # FOST 论文里的分类 loss，交叉熵
         # cls_loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=self.input_score_maps * self.input_training_mask,
@@ -228,17 +236,16 @@ class Network(object):
         union = tf.reduce_sum(y_true_cls * self.input_training_mask) + tf.reduce_sum(
             y_pred_cls * self.input_training_mask) + eps
         loss = 1. - (2 * intersection / union)
-        tf.summary.scalar('classification_dice_loss', loss)
         return loss
 
     def _build_share_conv(self):
-        self.conv_net, self.end_points = self._image_to_head(self.input_images, self.is_training)
+        self.conv_net, self.end_points = self._image_to_head(self.input_images, self.input_is_training)
 
         batch_norm_params = {
             'decay': 0.997,
             'epsilon': 1e-5,
             'scale': True,
-            'is_training': self.is_training
+            'is_training': self.input_is_training
         }
 
         with slim.arg_scope([slim.conv2d],

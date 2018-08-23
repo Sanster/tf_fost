@@ -39,7 +39,7 @@ def parse_args(infer=False):
 
     parser.add_argument('--chars_file', default='./data/chars/eng.txt')
 
-    parser.add_argument('--val_step', type=int, default=2000, help='Steps to do val.test and save checkpoint')
+    parser.add_argument('--val_step', type=int, default=72, help='Steps to do val.test and save checkpoint')
     parser.add_argument('--log_step', type=int, default=10, help='Steps save tensorflow summary')
 
     # parser.add_argument('--train_dir', default='/home/cwq/data/MLT2017/fost')
@@ -52,7 +52,8 @@ def parse_args(infer=False):
     parser.add_argument('--cfg_name', default='default')
 
     # Only for inference
-    parser.add_argument('--infer_dir', default='./data/demo', help='Directory store infer images and labels')
+    parser.add_argument('--infer_dir', default='/home/cwq/data/ocr/IC15/ch4_test_images',
+                        help='Directory store infer images and labels')
     parser.add_argument('--infer_copy_failed', action='store_true', default=False,
                         help='Copy failed image to result directory')
     parser.add_argument('--infer_batch_size', type=int, default=1)

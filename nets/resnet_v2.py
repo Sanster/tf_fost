@@ -256,8 +256,8 @@ def resnet_v2_50(inputs,
 
 
 class ResNetV2(Network):
-    def __init__(self, cfg, num_classes):
-        super().__init__(cfg, num_classes)
+    def __init__(self, cfg, num_classes, is_training=True):
+        super().__init__(cfg, num_classes, is_training)
         self._scope = 'resnet_v2_50'
 
     def _image_to_head(self, inputs, is_training):

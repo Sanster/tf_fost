@@ -84,19 +84,19 @@ class Trainer(object):
                 if batch != 0 and (batch % self.args.log_step == 0):
                     summary = True
 
-                total_cost, detect_loss, detect_cls_loss, detect_reg_loss, reco_loss, global_step, lr = self._train(
+                total_cost, detect_loss, detect_cls_loss, detect_reg_loss, global_step, lr = self._train(
                     summary=summary)
 
-                print("{:.02f}s, epoch: {}, batch: {}/{}, total_loss: {:.03}, reco_loss: {:.03}, "
+                print("{:.02f}s, epoch: {}, batch: {}/{}, total_loss: {:.03}, "
                       "detect_loss (total: {:.03}, cls: {:.03}, reg: {:.03}), "
                       "lr: {:.05}"
                       .format(time.time() - batch_start_time, epoch, batch, self.tr_ds.num_batches,
-                              total_cost, reco_loss, detect_loss, detect_cls_loss, detect_reg_loss, lr))
+                              total_cost, detect_loss, detect_cls_loss, detect_reg_loss, lr))
 
-                # if global_step != 0 and (global_step % self.args.val_step == 0):
-                #     val_acc = self._do_val(self.val_ds, epoch, global_step, "val")
-                #     test_acc = self._do_val(self.test_ds, epoch, global_step, "test")
-                #     self._save_checkpoint(self.args.ckpt_dir, global_step, val_acc, test_acc)
+                if global_step != 0 and (global_step % self.args.val_step == 0):
+                    #     val_acc = self._do_val(self.val_ds, epoch, global_step, "val")
+                    #     test_acc = self._do_val(self.test_ds, epoch, global_step, "test")
+                    self._save_checkpoint(self.args.ckpt_dir, global_step)
 
             self.batch_start_index = 0
 
@@ -139,7 +139,7 @@ class Trainer(object):
             self.model.detect_loss,
             self.model.detect_cls_loss,
             self.model.detect_reg_loss,
-            self.model.reco_ctc_loss,
+            # self.model.reco_ctc_loss,
             self.model.global_step,
             self.model.lr,
             self.model.train_op
@@ -153,22 +153,22 @@ class Trainer(object):
             self.model.input_score_maps: score_maps,
             self.model.input_geo_maps: geo_maps,
             self.model.input_training_mask: training_mask,
-            self.model.input_text_roi_count: text_roi_count,
-            self.model.input_affine_matrixs: affine_matrixs,
-            self.model.input_affine_rects: affine_rects,
-            self.model.input_text_labels: labels,
-            self.model.is_training: True
+            # self.model.input_text_roi_count: text_roi_count,
+            # self.model.input_affine_matrixs: affine_matrixs,
+            # self.model.input_affine_rects: affine_rects,
+            # self.model.input_text_labels: labels,
+            self.model.input_is_training: True
         }
 
         if summary:
-            summary, total_loss, detect_loss, detect_cls_loss, detect_reg_loss, reco_ctc_loss, global_step, lr, _ = self.sess.run(
+            summary, total_loss, detect_loss, detect_cls_loss, detect_reg_loss, global_step, lr, _ = self.sess.run(
                 fetches, feed)
             self.train_writer.add_summary(summary, global_step)
         else:
-            total_loss, detect_loss, detect_cls_loss, detect_reg_loss, reco_ctc_loss, global_step, lr, _ = self.sess.run(
+            total_loss, detect_loss, detect_cls_loss, detect_reg_loss, global_step, lr, _ = self.sess.run(
                 fetches, feed)
 
-        return total_loss, detect_loss, detect_cls_loss, detect_reg_loss, reco_ctc_loss, global_step, lr
+        return total_loss, detect_loss, detect_cls_loss, detect_reg_loss, global_step, lr
 
     # def _train_with_summary(self):
     #     img_batch, label_batch, labels, _ = self.tr_ds.get_next_batch(self.sess)
@@ -211,7 +211,7 @@ class Trainer(object):
     #     return accuracy
 
     def _save_checkpoint(self, ckpt_dir, step, val_acc=None, test_acc=None):
-        ckpt_name = "crnn_%d" % step
+        ckpt_name = "fost_%d" % step
         if val_acc is not None:
             ckpt_name += '_val_%.03f' % val_acc
         if test_acc is not None:
