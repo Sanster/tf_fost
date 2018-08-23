@@ -46,6 +46,8 @@ def parse_args(infer=False):
     # parser.add_argument('--train_gt_dir', default='/home/cwq/data/MLT2017/fost_gt')
     parser.add_argument('--train_dir', default='/home/cwq/data/ocr/IC15/ch4_training_images')
     parser.add_argument('--train_gt_dir', default='/home/cwq/data/ocr/IC15/ch4_training_localization_transcription_gt')
+    # parser.add_argument('--train_dir', default='/home/cwq/data/ocr/IC15/test')
+    # parser.add_argument('--train_gt_dir', default='/home/cwq/data/ocr/IC15/test_gt')
 
     parser.add_argument('--val_dir', default=None, help='Directory store validation images and labels')
     parser.add_argument('--test_dir', default=None, help='Directory store test images and labels')

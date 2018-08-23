@@ -2,6 +2,7 @@ import glob
 import math
 import os
 
+from copy import deepcopy
 import tensorflow as tf
 from tensorflow.python.framework import dtypes
 import cv2
@@ -123,10 +124,10 @@ class Dataset:
     def _input_py_parser(self, base_name):
         """
         按照论文当中进行 data augmentation 的方法进行处理
-        - TODO: 将图片的长边 resize 到 640 ~ 2560 之间
+        - 将图片的短边 resize 到 640 ~ 2560 之间
+        - random crop 出 640 x 640 的图片，这一步应该要保证 crop 时不能把文字截断
         - TODO: 图片随机旋转 -10 ~ 10 度
         - TODO: 宽度保持不变，图片的高度随机缩放 0.8 ~ 1.2
-        - TODO: random crop 出 640 x 640 的图片，这一步应该要保证 crop 时不能把文字截断
         """
         base_name = base_name.decode()
         gt_name = 'gt_%s.txt' % base_name.split('.')[0]
@@ -143,48 +144,66 @@ class Dataset:
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32)
         img -= self.pixel_mean
 
-        # long_side_length = np.random.randint(640, 2560)
+        long_side_length = np.random.randint(641, 2560)
 
         # 放大的倍数，e.g 放大 1.2 倍，放大 0.5 倍(即缩小2倍)
-        # scale = long_side_length / max(img.shape[0], img.shape[1])
-        # img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        # 和论文中不太一样，把短边缩放到至少 641
+        scale = long_side_length / min(img.shape[0], img.shape[1])
 
-        xscale = self.cfg.train.croped_img_size / img.shape[1]
-        yscale = self.cfg.train.croped_img_size / img.shape[0]
+        img = self._scale_img(gts, img, scale)
 
-        for gt in gts:
-            # scale
-            gt[0][:, 0] = (gt[0][:, 0] * xscale).astype(np.int32)
-            gt[0][:, 1] = (gt[0][:, 1] * yscale).astype(np.int32)
+        img_croped, gts_croped = self._crop_img(img, gts)
 
-            # ignore small height text
-            rbox = get_min_area_rect(gt[0])
-            roi_h = int(np.linalg.norm(rbox[0][1] - rbox[0][2]))
-            if roi_h < self.cfg.min_text_height:
-                gt[-1] = True
+        # 情况2： gt ltrb 的宽度全都过宽，或者高度，超过了 croped_img_size。
+        # 将 ignore=False 最大的 gt ltrb 缩放到 croped_img_size,根据这个 scale 对全图进行缩放
+        if img_croped is None and gts_croped is None:
+            ltrb_gts = [(get_ltrb_by4vec(g[0]).astype(np.int32), g[-1]) for g in gts]
 
-        # TODO: Use random crop
-        img = cv2.resize(img, (self.cfg.train.croped_img_size, self.cfg.train.croped_img_size),
-                         interpolation=cv2.INTER_AREA)
+            max_length = 0
+            for gt in ltrb_gts:
+                if not gt[1]:
+                    _w = gt[0][2] - gt[0][0]
+                    _h = gt[0][3] - gt[0][1]
+                    if _w > max_length:
+                        max_length = _w
+                    if _h > max_length:
+                        max_length = _h
 
-        # if min(img.shape[0], img.shape[1]) < self.cfg.train.croped_img_size:
-        #     img_croped = img
-        # else:
-        #     img_croped, gts = self._crop_img(img, gts)
+            if DEBUG:
+                print("Rescale image to let max length of gts smaller than croped_img_size: %d" % max_length)
+
+            scale = (self.cfg.train.croped_img_size - 3) / max_length
+            img = self._scale_img(gts, img, scale)
+            img_croped, gts_croped = self._crop_img(img, gts)
+
+        # 以防万一直接 resize 到 croped_img_size
+        if img_croped is None:
+            xscale = self.cfg.train.croped_img_size / img.shape[1]
+            yscale = self.cfg.train.croped_img_size / img.shape[0]
+            img_croped = self._scale_img(gts, img, xscale, yscale)
+            gts_croped = gts
 
         if DEBUG:
-            for gt in gts:
-                gt[0] = gt[0].astype(np.int32)
-                img = cv2_utils.draw_four_vectors(img, gt[0])
             recoverd_img = img + self.pixel_mean
             recoverd_img = recoverd_img.astype(np.uint8)
             bgr = cv2.cvtColor(recoverd_img, cv2.COLOR_RGB2BGR)
-            cv2.imwrite('test.jpg', bgr)
+            for gt in gts:
+                gt[0] = gt[0].astype(np.int32)
+                bgr = cv2_utils.draw_four_vectors(bgr, gt[0])
+            cv2.imwrite('resized_img.jpg', bgr)
 
-        score_map, geo_map, training_mask = self.generate_rbox(img.shape, gts)
+            recoverd_img = img_croped + self.pixel_mean
+            recoverd_img = recoverd_img.astype(np.uint8)
+            bgr = cv2.cvtColor(recoverd_img, cv2.COLOR_RGB2BGR)
+            for gt in gts_croped:
+                gt[0] = gt[0].astype(np.int32)
+                bgr = cv2_utils.draw_four_vectors(bgr, gt[0])
+            cv2.imwrite('croped_img.jpg', bgr)
+
+        score_map, geo_map, training_mask = self.generate_rbox(img_croped.shape, gts_croped)
 
         valid_text_count = 0
-        for gt in gts:
+        for gt in gts_croped:
             ignore = gt[-1]
             if not ignore:
                 # Ground true label data for CRNN
@@ -198,7 +217,7 @@ class Dataset:
         affine_rects = np.zeros((valid_text_count, 4), np.int32)
 
         count = 0
-        for gt in gts:
+        for gt in gts_croped:
             ignore = gt[-1]
             if not ignore:
                 # Ground true label data for CRNN
@@ -220,7 +239,34 @@ class Dataset:
 
         # return img, score_map, geo_map, training_mask, [valid_text_count], affine_matrixs, affine_rects, labels, [
         #     img_path]
-        return img, score_map, geo_map, training_mask
+        return img_croped, score_map, geo_map, training_mask
+
+    def _scale_img(self, gts, img, xscale, yscale=None):
+        """
+        会修改 gts 中的坐标
+        :param gts:
+        :param img:
+        :param scale:
+        :return:
+        """
+        if yscale is None:
+            yscale = xscale
+
+        img = cv2.resize(img, None, fx=xscale, fy=yscale, interpolation=cv2.INTER_AREA)
+        if DEBUG:
+            print("Resized image with xscale: %f, yscale: %f, width: %d, height: %d" % (
+                xscale, yscale, img.shape[1], img.shape[0]))
+        for gt in gts:
+            # apply scale
+            gt[0][:, 0] = (gt[0][:, 0] * xscale).astype(np.int32)
+            gt[0][:, 1] = (gt[0][:, 1] * yscale).astype(np.int32)
+
+            # ignore small height text
+            rbox = get_min_area_rect(gt[0])
+            roi_h = int(np.linalg.norm(rbox[0][1] - rbox[0][2]))
+            if roi_h < self.cfg.min_text_height:
+                gt[-1] = True
+        return img
 
     def _get_affine_M2(self):
         # TODO use method in paper to cal M
@@ -295,27 +341,158 @@ class Dataset:
 
     def _crop_img(self, img, gts):
         """
-        使用窗口在图片上滑动，窗口不能把文字截断，窗口必须包含文字
+        使用 croped_img_size 大小的窗口在图片上截取图片，窗口不能把文字截断，窗口必须包含文字
         :param img:
-        :param gts: [((x1,y1,x2,y2,x3,y3,x4,y4),language,text,ignore)]
+        :param gts: [[[x1,y1],[x2,y2],[x3,y3],[x4,y4]],language,text,ignore)]
         :return:
         """
         # 先根据 polys 计算出 bounding box
-        ltrb_gts = [(get_ltrb(g[0]).astype(np.int32), g[3]) for g in gts]
+        ltrb_gts = [(get_ltrb_by4vec(g[0]).astype(np.int32), g[-1]) for g in gts]
+
+        h = img.shape[0]
+        w = img.shape[1]
 
         # 因为滑窗的尺寸是定的，所以这里只计算滑窗左上角点的取值范围
-        # 用来记录图像上的每一个像素是否可以所谓 left-top 点
-        corner_map = np.ones((img.shape[0], img.shape[1]), dtype=np.uint8)
+        # 用来记录图像上的每一个像素是否可以作为 left-top 点
+        corner_map = np.zeros((h, w), dtype=np.uint8)
+        for bbox, ignore in ltrb_gts:
+            if ignore:
+                continue
+            # bbox 允许的 crop 区域
+            # 如果文字区域很宽，超过了 croped_img_size，可能出现 xmin > xmax 的情况
+            # 如果文字区域很高，超过了 croped_img_size，可能出现 ymin > ymax 的情况
+            xmin = max(0, bbox[2] - self.cfg.train.croped_img_size)
+            ymin = max(0, bbox[3] - self.cfg.train.croped_img_size)
+            xmax = max(1, bbox[0])
+            ymax = max(1, bbox[1])
+
+            if DEBUG:
+                print("bbox valid left-top lrtb: %d %d %d %d" % (xmin, ymin, xmax, ymax))
+            corner_map[ymin: ymax, xmin:xmax] = 1
+
+        if DEBUG:
+            print("valid left-top xy after bbox: %d" % len(np.where(corner_map > 0)[0]))
+            cv2.imwrite('valid_bbox_corner_map.jpg', corner_map * 255)
+
+        # 右侧 padding 641 的区域内不能作为 left-top
+        corner_map[0:h, w - self.cfg.train.croped_img_size:w] = 0
+        # 底部 padding 641 的区域内不能作为 left-top
+        corner_map[h - self.cfg.train.croped_img_size:h, 0: w] = 0
+
+        if DEBUG:
+            print("valid left-top xy after padding: %d" % len(np.where(corner_map > 0)[0]))
 
         # bbox 区域不能作为 left-top
         for bbox, ignore in ltrb_gts:
-            if not ignore:
-                corner_map[bbox[1]:bbox[3], bbox[0]: bbox[2]] = 0
+            if ignore:
+                continue
+            # bbox 区域不能作为 left-top
+            corner_map[bbox[1] + 1:bbox[3], bbox[0] + 1: bbox[2]] = 0
+
+            # bbox 左侧 croped_img_size 区域内的像素都不能作为 left-top 点
+            left_side = max(1, bbox[0] - self.cfg.train.croped_img_size)
+            corner_map[bbox[1] + 1:bbox[3], left_side: bbox[0]] = 0
 
         if DEBUG:
-            cv2.imwrite('test.jpg', corner_map * 255)
+            print("valid left-top xy after ignore bbox: %d" % len(np.where(corner_map > 0)[0]))
 
-        return img, gts
+        if DEBUG:
+            cv2.imwrite('valid_corner_map.jpg', corner_map * 255)
+
+        ys, xs = np.where(corner_map > 0)
+        if DEBUG:
+            print("valid x: %d, valid y: %d" % (len(xs), len(ys)))
+
+        # 完全没有可以 crop 的区域
+        if len(ys) == 0 or len(xs) == 0:
+            if DEBUG:
+                print("No valid left-top xy to select!!")
+
+            all_ignore = all([ignore for _, ignore in ltrb_gts])
+            # 情况1： 所有 gt 区域都是 ignore=True。进行 random crop，不管有没有划过 ignore 区域
+            if all_ignore:
+                if DEBUG:
+                    print("All text gt ignore=True")
+
+                x = np.random.randint(0, w - self.cfg.train.croped_img_size)
+                y = np.random.randint(0, h - self.cfg.train.croped_img_size)
+                croped_img, crop_ltrb = self._crop_by_xy(img, x, y)
+
+                selected_gts = self.find_polys_in_area(gts, crop_ltrb)
+                for gt in selected_gts:
+                    gt[0][:, 0] -= crop_ltrb[0]
+                    gt[0][:, 1] -= crop_ltrb[1]
+
+                return croped_img, selected_gts
+            else:
+                if DEBUG:
+                    print("All text gt ltrb width > croped img_size")
+                # 情况2： gt ltrb 的宽度全都过宽，超过了 croped_img_size。
+                # 将 ignore=False 最大的 gt ltrb 缩放到 croped_img_size,根据这个 scale 对全图进行缩放
+                # 返回 None 标志位，在外部进行缩放，然后再调用一次 _crop_img()
+                return None, None
+
+        if DEBUG:
+            print('xs length: %d' % len(xs))
+            print('ys length: %d' % len(ys))
+
+            if len(ys) == 0 or len(xs) == 0:
+                recoverd_img = img + self.pixel_mean
+                recoverd_img = recoverd_img.astype(np.uint8)
+                bgr = cv2.cvtColor(recoverd_img, cv2.COLOR_RGB2BGR)
+                for gt in gts:
+                    gt[0] = gt[0].astype(np.int32)
+                    bgr = cv2_utils.draw_four_vectors(bgr, gt[0])
+                cv2.imwrite('test.jpg', bgr)
+
+        x = np.random.choice(xs)
+        y = np.random.choice(ys)
+        if DEBUG:
+            print("Random crop selected xy: %d, %d" % (x, y))
+
+        croped_img, crop_ltrb = self._crop_by_xy(img, x, y)
+
+        selected_gts = self.find_polys_in_area(gts, crop_ltrb)
+        for gt in selected_gts:
+            gt[0][:, 0] -= crop_ltrb[0]
+            gt[0][:, 1] -= crop_ltrb[1]
+
+        return croped_img, selected_gts
+
+    def _crop_by_xy(self, img, x, y):
+        """
+        :param img:
+        :param x/y: 图片左上角坐标
+        :return:
+        """
+        xmin = x
+        xmax = x + self.cfg.train.croped_img_size
+        ymin = y
+        ymax = y + self.cfg.train.croped_img_size
+        return img[ymin:ymax, xmin: xmax], (xmin, ymin, xmax, ymax)
+
+    def find_polys_in_area(self, gts, area):
+        """
+        返回在某一个范围内的 polys，会进行深拷贝
+        :param gts: [[[x1,y1],[x2,y2],[x3,y3],[x4,y4]],language,text,ignore)]
+        :param area: (xmin, ymin, xmax, ymax)
+        """
+        xmin = area[0]
+        ymin = area[1]
+        xmax = area[2]
+        ymax = area[3]
+        polys = np.array([gt[0] for gt in gts])
+        poly_axis_in_area = (polys[:, :, 0] >= xmin) & (polys[:, :, 0] <= xmax) \
+                            & (polys[:, :, 1] >= ymin) & (polys[:, :, 1] <= ymax)
+        selected_indexs = np.where(np.sum(poly_axis_in_area, axis=1) == 4)[0]
+
+        selected_gts = []
+        for i in range(len(gts)):
+            if i in selected_indexs:
+                gt = deepcopy(gts[i])
+                selected_gts.append(gt)
+
+        return selected_gts
 
     def generate_rbox(self, im_size, gts):
         """
@@ -343,9 +520,9 @@ class Dataset:
             ignore = gt[-1]
             if ignore:
                 cv2.fillPoly(training_mask, [poly], 0)
-                if DEBUG:
-                    cv2.imwrite('training_mask.jpg', training_mask * 255)
                 continue
+            if DEBUG:
+                cv2.imwrite('training_mask.jpg', training_mask * 255)
 
             # score map
             shrinked_poly = self.shrink_poly(poly.copy()).astype(np.int32)
@@ -527,9 +704,9 @@ if __name__ == "__main__":
         img_dir='/home/cwq/data/ocr/IC15/ch4_training_images',
         gt_dir='/home/cwq/data/ocr/IC15/ch4_training_localization_transcription_gt',
         converter=converter,
-        batch_size=6,
+        batch_size=1,
         num_parallel_calls=1,
-        shuffle=False)
+        shuffle=True)
 
     with tf.Session() as sess:
         ds.init_op.run()
