@@ -17,6 +17,7 @@ from lib.label_converter import LabelConverter
 
 from parse_args import parse_args
 from lib.config import load_config
+import lib.utils as utils
 
 
 # noinspection PyAttributeOutsideInit
@@ -51,7 +52,7 @@ class Trainer(object):
         self.model.create_architecture()
         self.sess = tf.Session(config=tf.ConfigProto(allow_soft_placement=True))
 
-        if args.pretrained_model:
+        if not args.restore and args.pretrained_model:
             var_keep_dic = self.get_variables_in_checkpoint_file(args.pretrained_model)
             print('Loading initial model weights from {:s}'.format(args.pretrained_model))
             variables_to_restore = self.model.get_variables_to_restore(var_keep_dic)
@@ -70,8 +71,8 @@ class Trainer(object):
         self.train_writer = tf.summary.FileWriter(self.args.train_log_dir, self.sess.graph)
         self.val_writer = tf.summary.FileWriter(self.args.val_log_dir, self.sess.graph)
 
-        # if self.args.restore:
-        #     self._restore()
+        if self.args.restore:
+            self._restore()
 
         print('Begin training...')
         for epoch in range(self.epoch_start_index, self.cfg.epochs):
@@ -87,10 +88,10 @@ class Trainer(object):
                 total_cost, detect_loss, detect_cls_loss, detect_reg_loss, global_step, lr = self._train(
                     summary=summary)
 
-                print("{:.02f}s, epoch: {}, batch: {}/{}, total_loss: {:.03}, "
+                print("{:.02f}s, epoch: {}, batch: {}/{}, steps: {},total_loss: {:.03}, "
                       "detect_loss (total: {:.03}, cls: {:.03}, reg: {:.03}), "
                       "lr: {:.05}"
-                      .format(time.time() - batch_start_time, epoch, batch, self.tr_ds.num_batches,
+                      .format(time.time() - batch_start_time, epoch, batch, self.tr_ds.num_batches, global_step,
                               total_cost, detect_loss, detect_cls_loss, detect_reg_loss, lr))
 
                 if global_step != 0 and (global_step % self.args.val_step == 0):
@@ -124,8 +125,9 @@ class Trainer(object):
                       "with SNAPPY.")
 
     def _train(self, summary=False):
-        imgs, score_maps, geo_maps, training_mask, text_roi_count, affine_matrixs, affine_rects, labels, img_paths = \
-            self.tr_ds.get_next_batch(self.sess)
+        # imgs, score_maps, geo_maps, training_mask, text_roi_count, affine_matrixs, affine_rects, labels, img_paths = \
+        #     self.tr_ds.get_next_batch(self.sess)
+        imgs, score_maps, geo_maps, training_mask = self.tr_ds.get_next_batch(self.sess)
 
         # print(imgs.shape)
         # print(score_maps.shape)
@@ -242,6 +244,18 @@ class Trainer(object):
                 break
 
         return meta_exists, meta_file_name
+
+    def _restore(self):
+        utils.restore_ckpt(self.sess, self.saver, self.args.ckpt_dir)
+
+        step_restored = self.sess.run(self.model.global_step)
+
+        self.epoch_start_index = math.floor(step_restored / self.tr_ds.num_batches)
+        self.batch_start_index = step_restored % self.tr_ds.num_batches
+
+        print("Restored global step: %d" % step_restored)
+        print("Restored epoch: %d" % self.epoch_start_index)
+        print("Restored batch_start_index: %d" % self.batch_start_index)
 
 
 def main():

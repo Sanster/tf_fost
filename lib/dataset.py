@@ -58,32 +58,35 @@ class Dataset:
         return base_names
 
     def get_next_batch(self, sess):
-        imgs, score_maps, geo_maps, training_mask, text_roi_count, affine_matrixs, affine_rects, labels, img_paths = sess.run(
+        # imgs, score_maps, geo_maps, training_mask, text_roi_count, affine_matrixs, affine_rects, labels, img_paths = sess.run(
+        #     self.next_batch)
+        imgs, score_maps, geo_maps, training_mask = sess.run(
             self.next_batch)
 
-        if DEBUG:
-            print("text_roi_count")
-            print(text_roi_count)
-            print("affine_matrixs shape")
-            print(affine_matrixs.shape)
-            print("affine_rects shape")
-            print(affine_rects.shape)
+        # if DEBUG:
+        #     print("text_roi_count")
+        #     print(text_roi_count)
+        #     print("affine_matrixs shape")
+        #     print(affine_matrixs.shape)
+        #     print("affine_rects shape")
+        #     print(affine_rects.shape)
 
-        batch_encoded_labels = []
-        for img_labels in labels:
-            decoded_labels = [l.decode() for l in img_labels]
-            # remove padded labels
-            decoded_labels = list(filter(lambda x: x, decoded_labels))
-            encoded_labels = self.converter.encode_list(decoded_labels)
-            batch_encoded_labels.extend(encoded_labels)
+        # batch_encoded_labels = []
+        # for img_labels in labels:
+        #     decoded_labels = [l.decode() for l in img_labels]
+        #     # remove padded labels
+        #     decoded_labels = list(filter(lambda x: x, decoded_labels))
+        #     encoded_labels = self.converter.encode_list(decoded_labels)
+        #     batch_encoded_labels.extend(encoded_labels)
+        #
+        # sparse_labels = self._sparse_tuple_from_label(batch_encoded_labels)
+        #
+        # batch_img_paths = []
+        # for p in img_paths:
+        #     batch_img_paths.append(p[0])
 
-        sparse_labels = self._sparse_tuple_from_label(batch_encoded_labels)
-
-        batch_img_paths = []
-        for p in img_paths:
-            batch_img_paths.append(p[0])
-
-        return imgs, score_maps, geo_maps, training_mask, text_roi_count, affine_matrixs, affine_rects, sparse_labels, batch_img_paths
+        # return imgs, score_maps, geo_maps, training_mask, text_roi_count, affine_matrixs, affine_rects, sparse_labels, batch_img_paths
+        return imgs, score_maps, geo_maps, training_mask
 
     def _create_dataset(self):
         tf_base_names = tf.convert_to_tensor(self.base_names, dtype=dtypes.string)
@@ -97,20 +100,23 @@ class Dataset:
             d = d.shuffle(buffer_size=self.size)
 
         d = d.map(lambda base_name: tf.py_func(self._input_py_parser, [base_name],
-                                               [tf.uint8, tf.float32, tf.float32, tf.uint8, tf.int64, tf.float64,
-                                                tf.int32, tf.string, tf.string]))
+                                               [tf.float32, tf.float32, tf.float32, tf.uint8]))
 
-        # d = d.batch(self.batch_size)
-        d = d.padded_batch(self.batch_size,
-                           padded_shapes=([self.cfg.train.croped_img_size, self.cfg.train.croped_img_size, 3],
-                                          [160, 160, 1],
-                                          [160, 160, 5],
-                                          [160, 160, 1],
-                                          [1],
-                                          [None, 2, 3],
-                                          [None, 4],
-                                          [None],
-                                          [None]))
+        # d = d.map(lambda base_name: tf.py_func(self._input_py_parser, [base_name],
+        #                                        [tf.float32, tf.float32, tf.float32, tf.uint8, tf.int64, tf.float64,
+        #                                         tf.int32, tf.string, tf.string]))
+
+        d = d.batch(self.batch_size)
+        # d = d.padded_batch(self.batch_size,
+        #                    padded_shapes=([self.cfg.train.croped_img_size, self.cfg.train.croped_img_size, 3],
+        #                                   [160, 160, 1],
+        #                                   [160, 160, 5],
+        #                                   [160, 160, 1],
+        #                                   [1],
+        #                                   [None, 2, 3],
+        #                                   [None, 4],
+        #                                   [None],
+        #                                   [None]))
         d = d.prefetch(buffer_size=2)
         return d
 
@@ -134,9 +140,8 @@ class Dataset:
         gts = load_ic15_gt(gt_path)
 
         img = cv2.imread(img_path)
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float64)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32)
         img -= self.pixel_mean
-        img = img.astype(np.uint8)
 
         # long_side_length = np.random.randint(640, 2560)
 
@@ -171,7 +176,7 @@ class Dataset:
             for gt in gts:
                 gt[0] = gt[0].astype(np.int32)
                 img = cv2_utils.draw_four_vectors(img, gt[0])
-            recoverd_img = img.astype(np.float64) + self.pixel_mean
+            recoverd_img = img + self.pixel_mean
             recoverd_img = recoverd_img.astype(np.uint8)
             bgr = cv2.cvtColor(recoverd_img, cv2.COLOR_RGB2BGR)
             cv2.imwrite('test.jpg', bgr)
@@ -213,8 +218,9 @@ class Dataset:
             print(affine_matrixs.shape)
             print(affine_rects.shape)
 
-        return img, score_map, geo_map, training_mask, [valid_text_count], affine_matrixs, affine_rects, labels, [
-            img_path]
+        # return img, score_map, geo_map, training_mask, [valid_text_count], affine_matrixs, affine_rects, labels, [
+        #     img_path]
+        return img, score_map, geo_map, training_mask
 
     def _get_affine_M2(self):
         # TODO use method in paper to cal M
