@@ -170,14 +170,16 @@ class Dataset:
                         max_length = _h
 
             if DEBUG:
-                print("Rescale image to let max length of gts smaller than croped_img_size: %d" % max_length)
+                print(
+                    "Rescale image to let max length of gts smaller than croped_img_size, gt max length is: %d" % max_length)
 
             scale = (self.cfg.train.croped_img_size - 3) / max_length
             img = self._scale_img(gts, img, scale)
             img_croped, gts_croped = self._crop_img(img, gts)
 
         # 以防万一直接 resize 到 croped_img_size
-        if img_croped is None:
+        if img_croped is None or \
+                (img.shape[1] < self.cfg.train.croped_img_size or img.shape[0] < self.cfg.train.croped_img_size):
             xscale = self.cfg.train.croped_img_size / img.shape[1]
             yscale = self.cfg.train.croped_img_size / img.shape[0]
             img_croped = self._scale_img(gts, img, xscale, yscale)
@@ -236,6 +238,7 @@ class Dataset:
         if DEBUG:
             print(affine_matrixs.shape)
             print(affine_rects.shape)
+            print("img_croped shape: (%d, %d)" % (img_croped.shape[0], img_croped.shape[1]))
 
         # return img, score_map, geo_map, training_mask, [valid_text_count], affine_matrixs, affine_rects, labels, [
         #     img_path]
@@ -414,16 +417,22 @@ class Dataset:
                 if DEBUG:
                     print("All text gt ignore=True")
 
-                x = np.random.randint(0, w - self.cfg.train.croped_img_size)
-                y = np.random.randint(0, h - self.cfg.train.croped_img_size)
-                croped_img, crop_ltrb = self._crop_by_xy(img, x, y)
+                if w > self.cfg.train.croped_img_size and h > self.cfg.train.croped_img_size:
+                    x = np.random.randint(0, w - self.cfg.train.croped_img_size)
+                    y = np.random.randint(0, h - self.cfg.train.croped_img_size)
+                    croped_img, crop_ltrb = self._crop_by_xy(img, x, y)
 
-                selected_gts = self.find_polys_in_area(gts, crop_ltrb)
-                for gt in selected_gts:
-                    gt[0][:, 0] -= crop_ltrb[0]
-                    gt[0][:, 1] -= crop_ltrb[1]
-
-                return croped_img, selected_gts
+                    selected_gts = self.find_polys_in_area(gts, crop_ltrb)
+                    for gt in selected_gts:
+                        gt[0][:, 0] -= crop_ltrb[0]
+                        gt[0][:, 1] -= crop_ltrb[1]
+                    return croped_img, selected_gts
+                else:
+                    xscale = self.cfg.train.croped_img_size / w
+                    yscale = self.cfg.train.croped_img_size / h
+                    img_croped = self._scale_img(gts, img, xscale, yscale)
+                    gts_croped = gts
+                    return img_croped, gts_croped
             else:
                 if DEBUG:
                     print("All text gt ltrb width > croped img_size")
@@ -451,6 +460,10 @@ class Dataset:
             print("Random crop selected xy: %d, %d" % (x, y))
 
         croped_img, crop_ltrb = self._crop_by_xy(img, x, y)
+
+        if DEBUG:
+            print("crop_by_xy result")
+            print(croped_img.shape)
 
         selected_gts = self.find_polys_in_area(gts, crop_ltrb)
         for gt in selected_gts:

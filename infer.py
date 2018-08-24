@@ -37,9 +37,7 @@ def main(args):
         for im_file in im_files:
             img = cv2.imread(im_file)
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float64)
-            img = cv2.resize(img, (641, 641))
             img -= np.array([[[cfg.R_MEAN, cfg.G_MEAN, cfg.B_MEAN]]])
-            img = img.astype(np.uint8)
 
             timer = {'net': 0, 'restore': 0, 'nms': 0}
             start = time.time()

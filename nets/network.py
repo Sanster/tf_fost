@@ -36,8 +36,7 @@ class Network(object):
         raise NotImplementedError
 
     def create_architecture(self):
-        # ResNetV2 要求的, 需要 + 1
-        self.input_images = tf.placeholder(tf.float32, shape=[None, 641, 641, 3], name='input_images')
+        self.input_images = tf.placeholder(tf.float32, shape=[None, None, None, 3], name='input_images')
         self.input_score_maps = tf.placeholder(tf.float32, shape=[None, None, None, 1], name='input_score_maps')
         self.input_geo_maps = tf.placeholder(tf.float32, shape=[None, None, None, 5], name='input_geo_maps')
         self.input_training_mask = tf.placeholder(tf.float32, shape=[None, None, None, 1], name='input_training_mask')
