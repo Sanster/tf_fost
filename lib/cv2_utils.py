@@ -47,7 +47,7 @@ def get_min_area_rect(line):
 
     # 参考 EAST sort_rectangle() 函数
     if angle > 45:
-        angle = -(90 - angle)
+        angle = angle - 90.
 
     angle = np.deg2rad(angle)
 

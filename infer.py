@@ -8,8 +8,11 @@ import numpy as np
 
 from lib import lanms
 from lib.config import load_config
+from lib.cv2_utils import draw_four_vectors, draw_bounding_box
 from nets.resnet_v2 import ResNetV2
 from parse_args import parse_args
+
+DEBUG = False
 
 
 def main(args):
@@ -44,37 +47,32 @@ def main(args):
             score, geometry = sess.run(fetches, {model.input_images: [img], model.input_is_training: False})
             timer['net'] = time.time() - start
 
-            boxes, timer = detect(score, geometry, timer)
+            img = img.astype(np.float64) + np.array([[[cfg.R_MEAN, cfg.G_MEAN, cfg.B_MEAN]]])
+            img = img.astype(np.uint8)
+            img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+
+            boxes, timer = detect(img, score, geometry, timer)
             print('{} : net {:.0f}ms, restore {:.0f}ms, nms {:.0f}ms'.format(
                 im_file, timer['net'] * 1000, timer['restore'] * 1000, timer['nms'] * 1000))
 
             if boxes is not None:
                 boxes = boxes[:, :8].reshape((-1, 4, 2))
-                # boxes[:, :, 0] /= ratio_w
-                # boxes[:, :, 1] /= ratio_h
-                for box in boxes:
-                    cv2.polylines(img, [box.astype(np.int32).reshape((-1, 1, 2))], True, color=(255, 255, 0),
-                                  thickness=1)
-
-            img = img.astype(np.float64) + np.array([[[cfg.R_MEAN, cfg.G_MEAN, cfg.B_MEAN]]])
-            img = img.astype(np.uint8)
-            img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-
-            if boxes is not None:
                 for box in boxes:
                     cv2.polylines(img, [box.astype(np.int32).reshape((-1, 1, 2))], True, color=(0, 255, 0),
                                   thickness=2)
-            cv2.imshow('test', img)
+
+            cv2.imshow('result', img)
             k = cv2.waitKey()
             if k == 27:  # ESC
                 exit(-1)
 
 
-def detect(score_map, geo_map, timer, score_map_thresh=0.8, box_thresh=0.1, nms_thres=0.2):
+def detect(img, score_map, geo_map, timer, score_map_thresh=0.8, box_thresh=0.1, nms_thres=0.2):
     '''
     restore text boxes from score map and geo map
-    :param score_map:
-    :param geo_map:
+    :param img: only for save test image
+    :param score_map: [batch_size, height, width, 1]
+    :param geo_map: [batch_size, height, width, 5]
     :param timer:
     :param score_map_thresh: threshhold for score map
     :param box_thresh: threshhold for boxes
@@ -84,13 +82,33 @@ def detect(score_map, geo_map, timer, score_map_thresh=0.8, box_thresh=0.1, nms_
     if len(score_map.shape) == 4:
         score_map = score_map[0, :, :, 0]
         geo_map = geo_map[0, :, :, ]
-    # filter the score map
+    # 获得大于 score_map_thresh 的 score 的索引位置
+    # [None, 2]， dim 1 上，第一个数代表 y 轴，第二个代表 x 轴
     xy_text = np.argwhere(score_map > score_map_thresh)
-    # sort the text boxes via the y axis
+
+    # argsort 按照 xy_text y 轴坐标从小到大排序，并返回排完序的索引
+    # 根据排完序的索引获得排完序的 xy 坐标
     xy_text = xy_text[np.argsort(xy_text[:, 0])]
-    # restore
+
+    # 获得有效区域的 geo 信息
+    geometry = geo_map[xy_text[:, 0], xy_text[:, 1], :]
+
+    if DEBUG:
+        # draw all rbox before restore
+        debug_xy_text = xy_text * 4
+        rboxes = geometry[:, :4]
+        for i, yx in enumerate(debug_xy_text):
+            trbl = rboxes[i]
+            y = yx[0]
+            x = yx[1]
+            box = (int(x - trbl[3]), int(y - trbl[0]), int(x + trbl[1]), int(y + trbl[2]))
+            draw_bounding_box(img, box, color=(0, 0, 188))
+        cv2.imshow('rboxes', img)
+        cv2.waitKey()
+
     start = time.time()
-    text_box_restored = restore_rectangle_rbox(xy_text[:, ::-1] * 4, geo_map[xy_text[:, 0], xy_text[:, 1], :])  # N*4*2
+    text_box_restored = restore_rectangle_rbox(xy_text, geometry)
+
     print('{} text boxes before nms'.format(text_box_restored.shape[0]))
     boxes = np.zeros((text_box_restored.shape[0], 9), dtype=np.float32)
     boxes[:, :8] = text_box_restored.reshape((-1, 8))
@@ -102,6 +120,7 @@ def detect(score_map, geo_map, timer, score_map_thresh=0.8, box_thresh=0.1, nms_
     boxes = lanms.merge_quadrangle_n9(boxes.astype('float32'), nms_thres)
     timer['nms'] = time.time() - start
 
+    print('{} text boxes after nms'.format(boxes.shape[0]))
     if boxes.shape[0] == 0:
         return None, timer
 
@@ -115,77 +134,53 @@ def detect(score_map, geo_map, timer, score_map_thresh=0.8, box_thresh=0.1, nms_
     return boxes, timer
 
 
-def restore_rectangle_rbox(origin, geometry):
-    d = geometry[:, :4]
-    angle = geometry[:, 4]
-    print(angle)
-    # for angle > 0
-    origin_0 = origin[angle >= 0]
-    d_0 = d[angle >= 0]
-    angle_0 = angle[angle >= 0]
-    if origin_0.shape[0] > 0:
-        p = np.array([np.zeros(d_0.shape[0]), -d_0[:, 0] - d_0[:, 2],
-                      d_0[:, 1] + d_0[:, 3], -d_0[:, 0] - d_0[:, 2],
-                      d_0[:, 1] + d_0[:, 3], np.zeros(d_0.shape[0]),
-                      np.zeros(d_0.shape[0]), np.zeros(d_0.shape[0]),
-                      d_0[:, 3], -d_0[:, 2]])
-        p = p.transpose((1, 0)).reshape((-1, 5, 2))  # N*5*2
+def restore_rectangle_rbox(yx_pos, geometry):
+    """
+    :param yx_pos: selected xy position, score > score threshold
+    :param geometry: selected gep [N, 5]
+    :return: rotated box of text line[N, 4, 2]
+    """
+    if yx_pos.shape[0] <= 0:
+        return np.zeros((0, 4, 2))
 
-        rotate_matrix_x = np.array([np.cos(angle_0), np.sin(angle_0)]).transpose((1, 0))
-        rotate_matrix_x = np.repeat(rotate_matrix_x, 5, axis=1).reshape(-1, 2, 5).transpose((0, 2, 1))  # N*5*2
+    # 把 x 轴放到 dim 1 的第一个位置
+    position = yx_pos[:, ::-1]
 
-        rotate_matrix_y = np.array([-np.sin(angle_0), np.cos(angle_0)]).transpose((1, 0))
-        rotate_matrix_y = np.repeat(rotate_matrix_y, 5, axis=1).reshape(-1, 2, 5).transpose((0, 2, 1))
+    # cnn 的 total stride 为 4，这里恢复到原图尺寸
+    position = position * 4
 
-        p_rotate_x = np.sum(rotate_matrix_x * p, axis=2)[:, :, np.newaxis]  # N*5*1
-        p_rotate_y = np.sum(rotate_matrix_y * p, axis=2)[:, :, np.newaxis]  # N*5*1
+    trbls = geometry[:, :4]
+    angles = geometry[:, 4]
 
-        p_rotate = np.concatenate([p_rotate_x, p_rotate_y], axis=2)  # N*5*2
+    rboxes = []
+    for i, trbl in enumerate(trbls):
+        angle = angles[i]
+        x = position[i][0]
+        y = position[i][1]
+        # 根据像素点到 trbl 的距离恢复出 bounding boxj
+        xmin = x - trbl[3]
+        xmax = x + trbl[1]
+        ymin = y - trbl[0]
+        ymax = y + trbl[2]
 
-        p3_in_origin = origin_0 - p_rotate[:, 4, :]
-        new_p0 = p_rotate[:, 0, :] + p3_in_origin  # N*2
-        new_p1 = p_rotate[:, 1, :] + p3_in_origin
-        new_p2 = p_rotate[:, 2, :] + p3_in_origin
-        new_p3 = p_rotate[:, 3, :] + p3_in_origin
+        cx = (xmax + xmin) / 2
+        cy = (ymin + ymax) / 2
 
-        new_p_0 = np.concatenate([new_p0[:, np.newaxis, :], new_p1[:, np.newaxis, :],
-                                  new_p2[:, np.newaxis, :], new_p3[:, np.newaxis, :]], axis=1)  # N*4*2
-    else:
-        new_p_0 = np.zeros((0, 4, 2))
-    # for angle < 0
-    origin_1 = origin[angle < 0]
-    d_1 = d[angle < 0]
-    angle_1 = angle[angle < 0]
-    if origin_1.shape[0] > 0:
-        p = np.array([-d_1[:, 1] - d_1[:, 3], -d_1[:, 0] - d_1[:, 2],
-                      np.zeros(d_1.shape[0]), -d_1[:, 0] - d_1[:, 2],
-                      np.zeros(d_1.shape[0]), np.zeros(d_1.shape[0]),
-                      -d_1[:, 1] - d_1[:, 3], np.zeros(d_1.shape[0]),
-                      -d_1[:, 1], -d_1[:, 2]])
-        p = p.transpose((1, 0)).reshape((-1, 5, 2))  # N*5*2
+        angle = np.rad2deg(angle)
 
-        rotate_matrix_x = np.array([np.cos(-angle_1), -np.sin(-angle_1)]).transpose((1, 0))
-        rotate_matrix_x = np.repeat(rotate_matrix_x, 5, axis=1).reshape(-1, 2, 5).transpose((0, 2, 1))  # N*5*2
+        M = cv2.getRotationMatrix2D((cx, cy), -angle, 1.0)
+        pnts = np.array([
+            (xmin, ymin),
+            (xmax, ymin),
+            (xmax, ymax),
+            (xmin, ymax)
+        ])
+        pnts = np.array([pnts])
+        new_pnts = cv2.transform(pnts, M)[0]
+        rboxes.append(new_pnts)
 
-        rotate_matrix_y = np.array([np.sin(-angle_1), np.cos(-angle_1)]).transpose((1, 0))
-        rotate_matrix_y = np.repeat(rotate_matrix_y, 5, axis=1).reshape(-1, 2, 5).transpose((0, 2, 1))
-
-        p_rotate_x = np.sum(rotate_matrix_x * p, axis=2)[:, :, np.newaxis]  # N*5*1
-        p_rotate_y = np.sum(rotate_matrix_y * p, axis=2)[:, :, np.newaxis]  # N*5*1
-
-        p_rotate = np.concatenate([p_rotate_x, p_rotate_y], axis=2)  # N*5*2
-
-        p3_in_origin = origin_1 - p_rotate[:, 4, :]
-        new_p0 = p_rotate[:, 0, :] + p3_in_origin  # N*2
-        new_p1 = p_rotate[:, 1, :] + p3_in_origin
-        new_p2 = p_rotate[:, 2, :] + p3_in_origin
-        new_p3 = p_rotate[:, 3, :] + p3_in_origin
-
-        new_p_1 = np.concatenate([new_p0[:, np.newaxis, :], new_p1[:, np.newaxis, :],
-                                  new_p2[:, np.newaxis, :], new_p3[:, np.newaxis, :]], axis=1)  # N*4*2
-    else:
-        new_p_1 = np.zeros((0, 4, 2))
-    return np.concatenate([new_p_0, new_p_1])
+    rboxes = np.asarray(rboxes)
+    return rboxes
 
 
 if __name__ == "__main__":
