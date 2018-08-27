@@ -1,5 +1,7 @@
 import glob
+import os
 import time
+from zipfile import ZipFile
 
 import cv2
 
@@ -37,6 +39,7 @@ def main(args):
         ]
 
         im_files = glob.glob(args.infer_dir + "/*.*")
+        txt_files = []
         for im_file in im_files:
             img = cv2.imread(im_file)
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float64)
@@ -56,15 +59,45 @@ def main(args):
                 im_file, timer['net'] * 1000, timer['restore'] * 1000, timer['nms'] * 1000))
 
             if boxes is not None:
+                result_text_path = save_icdar_result(boxes[:8], './output/icdar', im_file)
+                txt_files.append(result_text_path)
+
                 boxes = boxes[:, :8].reshape((-1, 4, 2))
                 for box in boxes:
                     cv2.polylines(img, [box.astype(np.int32).reshape((-1, 1, 2))], True, color=(0, 255, 0),
                                   thickness=2)
+            # cv2.imshow('result', img)
+            # k = cv2.waitKey()
+            # if k == 27:  # ESC
+            #     exit(-1)
 
-            cv2.imshow('result', img)
-            k = cv2.waitKey()
-            if k == 27:  # ESC
-                exit(-1)
+        zip_path = os.path.join('./output/icdar_submit', '%s_submit.zip' % args.tag)
+        print(os.path.abspath(zip_path))
+        with ZipFile(zip_path, 'w') as f:
+            for txt in txt_files:
+                f.write(txt, txt.split('/')[-1])
+
+
+def save_icdar_result(boxes, icdar_dir, im_file, ltrb=False):
+    # ICDAR need box points in clockwise
+    im_name = im_file.split('/')[-1].split('.')[0]
+    res_file = os.path.join(icdar_dir, 'res_%s.txt' % im_name)
+    if not os.path.exists(icdar_dir):
+        os.makedirs(icdar_dir)
+
+    with open(res_file, mode='w') as f:
+        for line in boxes:
+            if ltrb:
+                min_x = min([line[0], line[2], line[4], line[6]])
+                min_y = min([line[1], line[3], line[5], line[7]])
+                max_x = max([line[0], line[2], line[4], line[6]])
+                max_y = max([line[1], line[3], line[5], line[7]])
+
+                f.write('%d,%d,%d,%d\n' % (min_x, min_y, max_x, max_y))
+            else:
+                f.write('%d,%d,%d,%d,%d,%d,%d,%d\n' % (line[0], line[1], line[2], line[3],
+                                                       line[4], line[5], line[6], line[7]))
+    return res_file
 
 
 def detect(img, score_map, geo_map, timer, score_map_thresh=0.8, box_thresh=0.1, nms_thres=0.2):
