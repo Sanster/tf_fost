@@ -16,7 +16,9 @@ from lib.icdar_utils import load_ic15_gt, load_mlt_gt, get_ltrb, get_ltrb_by4vec
 from lib.label_converter import LabelConverter
 from lib.utils import clip
 
-DEBUG = False
+DEBUG = True
+
+count = 0
 
 
 class Dataset:
@@ -144,13 +146,13 @@ class Dataset:
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32)
         img -= self.pixel_mean
 
-        long_side_length = np.random.randint(641, 2560)
+        long_side_length = np.random.randint(641, 2561)
 
         # 放大的倍数，e.g 放大 1.2 倍，放大 0.5 倍(即缩小2倍)
-        # 和论文中不太一样，把短边缩放到至少 641
-        scale = long_side_length / min(img.shape[0], img.shape[1])
+        # 和论文中不一样，把短边缩放到至少 641
+        scale = long_side_length / max(img.shape[0], img.shape[1])
 
-        img = self._scale_img(gts, img, scale)
+        img, gts = self._scale_img(gts, img, scale)
 
         crop_bg = False
         if np.random.rand() < self.cfg.train.bg_frac:
@@ -161,6 +163,9 @@ class Dataset:
         # 情况2： gt ltrb 的宽度全都过宽，或者高度，超过了 croped_img_size。
         # 将 ignore=False 最大的 gt ltrb 缩放到 croped_img_size,根据这个 scale 对全图进行缩放
         if img_croped is None and gts_croped is None:
+            if DEBUG:
+                print("Rescale image to let max length of gts smaller than croped_img_size")
+
             ltrb_gts = [(get_ltrb_by4vec(g[0]).astype(np.int32), g[-1]) for g in gts]
 
             max_length = 0
@@ -174,29 +179,40 @@ class Dataset:
                         max_length = _h
 
             if DEBUG:
-                print(
-                    "Rescale image to let max length of gts smaller than croped_img_size, gt max length is: %d" % max_length)
+                print("gt max length is: %d" % max_length)
 
             scale = (self.cfg.train.croped_img_size - 3) / max_length
-            img = self._scale_img(gts, img, scale)
+            img, gts = self._scale_img(gts, img, scale)
             img_croped, gts_croped = self._crop_img(img, gts, crop_bg)
 
         # 以防万一直接 resize 到 croped_img_size
         if img_croped is None or \
-                (img.shape[1] < self.cfg.train.croped_img_size or img.shape[0] < self.cfg.train.croped_img_size):
+                img.shape[1] != self.cfg.train.croped_img_size or \
+                img.shape[0] != self.cfg.train.croped_img_size:
+
+            if DEBUG:
+                print("_crop_img() failed")
+
             xscale = self.cfg.train.croped_img_size / img.shape[1]
             yscale = self.cfg.train.croped_img_size / img.shape[0]
-            img_croped = self._scale_img(gts, img, xscale, yscale)
-            gts_croped = gts
+            img_croped, gts_croped = self._scale_img(gts, img, xscale, yscale)
 
         if DEBUG:
+            global count
+            count += 1
             bgr = self._debug_draw_vectors(gts, img)
-            self._save_debug_img('resized_img.jpg', bgr, crop_bg)
+            self._save_debug_img('resized_img_%d.jpg' % count, bgr, crop_bg)
 
             bgr = self._debug_draw_vectors(gts_croped, img_croped)
-            self._save_debug_img('croped_img.jpg', bgr, crop_bg)
+            self._save_debug_img('croped_img_%d.jpg' % count, bgr, crop_bg)
+
+        if DEBUG:
+            print("before generate rbox")
 
         score_map, geo_map, training_mask = self.generate_rbox(img_croped.shape, gts_croped, crop_bg)
+
+        if DEBUG:
+            print("after generate rbox")
 
         # valid_text_count = 0
         # for gt in gts_croped:
@@ -254,7 +270,8 @@ class Dataset:
     def _save_debug_img(self, name, img, bg):
         if bg:
             name = 'bg_' + name
-        cv2.imwrite(name, img)
+        p = os.path.join('output/debug', name)
+        cv2.imwrite(p, img)
 
     def _scale_img(self, gts, img, xscale, yscale=None):
         """
@@ -271,17 +288,19 @@ class Dataset:
         if DEBUG:
             print("Resized image with xscale: %f, yscale: %f, width: %d, height: %d" % (
                 xscale, yscale, img.shape[1], img.shape[0]))
-        for gt in gts:
-            # apply scale
+
+        out_gts = []
+        for i in range(len(gts)):
+            gt = deepcopy(gts[i])
             gt[0][:, 0] = (gt[0][:, 0] * xscale).astype(np.int32)
             gt[0][:, 1] = (gt[0][:, 1] * yscale).astype(np.int32)
 
-            # ignore small height text
             rbox = get_min_area_rect(gt[0])
             roi_h = int(np.linalg.norm(rbox[0][1] - rbox[0][2]))
             if roi_h < self.cfg.min_text_height:
                 gt[-1] = True
-        return img
+            out_gts.append(gt)
+        return img, out_gts
 
     def _get_affine_M2(self):
         # TODO use method in paper to cal M
@@ -356,6 +375,7 @@ class Dataset:
 
     def _crop_img(self, img, gts, bg=True):
         """
+        TODO: 截取出来的图片有问题可能会截断文字
         使用 croped_img_size 大小的窗口在图片上截取图片，窗口不能把文字截断，窗口必须包含文字
         :param img:
         :param gts: [[[x1,y1],[x2,y2],[x3,y3],[x4,y4]],language,text,ignore)]
@@ -403,8 +423,7 @@ class Dataset:
                 else:
                     xscale = self.cfg.train.croped_img_size / w
                     yscale = self.cfg.train.croped_img_size / h
-                    img_croped = self._scale_img(gts, img, xscale, yscale)
-                    gts_croped = gts
+                    img_croped, gts_croped = self._scale_img(gts, img, xscale, yscale)
                     return img_croped, gts_croped
             else:
                 if DEBUG:
@@ -464,8 +483,8 @@ class Dataset:
             # 如果文字区域很高，超过了 croped_img_size，可能出现 ymin > ymax 的情况
             xmin = max(0, bbox[2] - self.cfg.train.croped_img_size)
             ymin = max(0, bbox[3] - self.cfg.train.croped_img_size)
-            xmax = max(1, bbox[0])
-            ymax = max(1, bbox[1])
+            xmax = max(0, bbox[0])
+            ymax = max(0, bbox[1])
 
             if DEBUG:
                 print("bbox valid left-top lrtb: %d %d %d %d" % (xmin, ymin, xmax, ymax))
@@ -475,10 +494,11 @@ class Dataset:
             print("valid left-top xy after bbox: %d" % len(np.where(corner_map > 0)[0]))
             cv2.imwrite('valid_bbox_corner_map.jpg', corner_map * 255)
 
-        # 右侧 padding 641 的区域内不能作为 left-top
-        corner_map[0:h, w - self.cfg.train.croped_img_size:w] = 0
+        w_padding = w // 10
+        h_padding = h // 10
+        corner_map[0:h, w - self.cfg.train.croped_img_size + w_padding:w] = 0
         # 底部 padding 641 的区域内不能作为 left-top
-        corner_map[h - self.cfg.train.croped_img_size:h, 0: w] = 0
+        corner_map[h - self.cfg.train.croped_img_size + h_padding:h, 0: w] = 0
 
         if DEBUG:
             print("valid left-top xy after padding: %d" % len(np.where(corner_map > 0)[0]))
@@ -488,11 +508,12 @@ class Dataset:
             if ignore:
                 continue
             # bbox 区域不能作为 left-top
-            corner_map[bbox[1] + 1:bbox[3], bbox[0] + 1: bbox[2]] = 0
+            corner_map[bbox[1]:bbox[3], bbox[0]: bbox[2]] = 0
 
             # bbox 左侧 croped_img_size 区域内的像素都不能作为 left-top 点
-            left_side = max(1, bbox[0] - self.cfg.train.croped_img_size)
-            corner_map[bbox[1] + 1:bbox[3], left_side: bbox[0]] = 0
+            left_side = max(0, bbox[0] - self.cfg.train.croped_img_size)
+            top_side = max(0, bbox[1] - self.cfg.train.croped_img_size)
+            corner_map[top_side:bbox[3], left_side: bbox[0]] = 0
         if DEBUG:
             print("valid left-top xy after ignore bbox: %d" % len(np.where(corner_map > 0)[0]))
             cv2.imwrite('valid_corner_map.jpg', corner_map * 255)
@@ -517,8 +538,8 @@ class Dataset:
             # 如果文字区域很高，超过了 croped_img_size，可能出现 ymin > ymax 的情况
             xmin = max(0, bbox[2] - self.cfg.train.croped_img_size)
             ymin = max(0, bbox[3] - self.cfg.train.croped_img_size)
-            xmax = max(1, bbox[0])
-            ymax = max(1, bbox[1])
+            xmax = max(0, bbox[0])
+            ymax = max(0, bbox[1])
 
             if DEBUG:
                 print("bbox bg left-top lrtb: %d %d %d %d" % (xmin, ymin, xmax, ymax))
@@ -529,9 +550,11 @@ class Dataset:
             cv2.imwrite('bg_bbox_corner_map.jpg', corner_map * 255)
 
         # 右侧 padding 641 的区域内不能作为 left-top
-        corner_map[0:h, w - self.cfg.train.croped_img_size:w] = 0
+        w_padding = w // 10
+        h_padding = h // 10
+        corner_map[0:h, w - self.cfg.train.croped_img_size + w_padding:w] = 0
         # 底部 padding 641 的区域内不能作为 left-top
-        corner_map[h - self.cfg.train.croped_img_size:h, 0: w] = 0
+        corner_map[h - self.cfg.train.croped_img_size + h_padding:h, 0: w] = 0
 
         if DEBUG:
             print("bg left-top xy after padding: %d" % len(np.where(corner_map > 0)[0]))
@@ -541,11 +564,12 @@ class Dataset:
             if ignore:
                 continue
             # bbox 区域不能作为 left-top
-            corner_map[bbox[1] + 1:bbox[3], bbox[0] + 1: bbox[2]] = 0
+            corner_map[bbox[1]:bbox[3], bbox[0]: bbox[2]] = 0
 
             # bbox 左侧 croped_img_size 区域内的像素都不能作为 left-top 点
-            left_side = max(1, bbox[0] - self.cfg.train.croped_img_size)
-            corner_map[bbox[1] + 1:bbox[3], left_side: bbox[0]] = 0
+            left_side = max(0, bbox[0] - self.cfg.train.croped_img_size)
+            top_side = max(0, bbox[1] - self.cfg.train.croped_img_size)
+            corner_map[top_side:bbox[3], left_side: bbox[0]] = 0
 
         if DEBUG:
             print("bg left-top xy after ignore bbox: %d" % len(np.where(corner_map > 0)[0]))
@@ -639,9 +663,9 @@ class Dataset:
             self._save_debug_img('geo_map_lb_lt.jpg', geo_map[::, ::, 3], bg)
 
         if DEBUG:
-            self._save_debug_img('score_map.jpg', score_map * 255, bg)
+            self._save_debug_img('score_map_%d.jpg' % count, score_map * 255, bg)
             self._save_debug_img('unshrink_score_map.jpg', unshrink_score_map * 255, bg)
-            self._save_debug_img('training_mask.jpg', training_mask * 255, bg)
+            self._save_debug_img('training_mask_%d.jpg' % count, training_mask * 255, bg)
 
         # TODO: why this is right?
         score_map = score_map[::4, ::4, np.newaxis].astype(np.float32)
@@ -801,7 +825,7 @@ if __name__ == "__main__":
         img_dir='/home/cwq/data/ocr/IC15+IC13/train',
         gt_dir='/home/cwq/data/ocr/IC15+IC13/train_gt',
         converter=converter,
-        batch_size=5,
+        batch_size=100,
         num_parallel_calls=1,
         shuffle=True)
 

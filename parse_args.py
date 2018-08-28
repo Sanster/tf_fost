@@ -32,7 +32,7 @@ def parse_args(infer=False):
     parser.add_argument('--restore', action='store_true', help='Whether to resotre checkpoint from ckpt_dir')
     parser.add_argument('--pretrained_model', type=str, default='/home/cwq/data/model/slim/resnet_v2_50.ckpt')
 
-    parser.add_argument('--tag', default='1315', help='Subdirectory to create in checkpoint_dir/log_dir/result_dir')
+    parser.add_argument('--tag', default='default', help='Subdirectory to create in checkpoint_dir/log_dir/result_dir')
     parser.add_argument('--ckpt_dir', default='./output/checkpoint', help='Directory to save tensorflow checkpoint')
     parser.add_argument('--log_dir', default='./output/log', help='Directory to save tensorboard logs')
     parser.add_argument('--result_dir', default='./output/result', help='Directory to save val/test result')
@@ -54,8 +54,8 @@ def parse_args(infer=False):
     parser.add_argument('--cfg_name', default='default')
 
     # Only for inference
-    parser.add_argument('--infer_dir', default='/home/cwq/data/ocr/IC15/ch4_test_images',
-                        help='Directory store infer images and labels')
+    # parser.add_argument('--infer_dir', default='/home/cwq/data/ocr/IC15/ch4_test_images')
+    parser.add_argument('--infer_dir', default='/home/cwq/data/ocr/IC15/ch4_training_images')
     parser.add_argument('--infer_batch_size', type=int, default=1)
 
     args, _ = parser.parse_known_args()

@@ -66,16 +66,16 @@ def main(args):
                 for box in boxes:
                     cv2.polylines(img, [box.astype(np.int32).reshape((-1, 1, 2))], True, color=(0, 255, 0),
                                   thickness=2)
-            # cv2.imshow('result', img)
-            # k = cv2.waitKey()
-            # if k == 27:  # ESC
-            #     exit(-1)
+            cv2.imshow('result', img)
+            k = cv2.waitKey()
+            if k == 27:  # ESC
+                exit(-1)
 
-        zip_path = os.path.join('./output/icdar_submit', '%s_submit.zip' % args.tag)
-        print(os.path.abspath(zip_path))
-        with ZipFile(zip_path, 'w') as f:
-            for txt in txt_files:
-                f.write(txt, txt.split('/')[-1])
+        # zip_path = os.path.join('./output/icdar_submit', '%s_submit.zip' % args.tag)
+        # print(os.path.abspath(zip_path))
+        # with ZipFile(zip_path, 'w') as f:
+        #     for txt in txt_files:
+        #         f.write(txt, txt.split('/')[-1])
 
 
 def save_icdar_result(boxes, icdar_dir, im_file, ltrb=False):
