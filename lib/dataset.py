@@ -128,8 +128,8 @@ class Dataset:
         按照论文当中进行 data augmentation 的方法进行处理
         - 将图片的短边 resize 到 640 ~ 2560 之间
         - random crop 出 640 x 640 的图片，这一步应该要保证 crop 时不能把文字截断
+        - 宽度保持不变，图片的高度随机缩放 0.8 ~ 1.2
         - TODO: 图片随机旋转 -10 ~ 10 度
-        - TODO: 宽度保持不变，图片的高度随机缩放 0.8 ~ 1.2
         """
         base_name = base_name.decode()
         gt_name = 'gt_%s.txt' % base_name.split('.')[0]
@@ -146,17 +146,16 @@ class Dataset:
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32)
         img -= self.pixel_mean
 
-        long_side_length = np.random.randint(641, 2561)
-
         # 放大的倍数，e.g 放大 1.2 倍，放大 0.5 倍(即缩小2倍)
-        # 和论文中不一样，把短边缩放到至少 641
-        scale = long_side_length / max(img.shape[0], img.shape[1])
+        # 把长缩放到至少 641，高度方向随机 0.8~1.2 倍
+        short_side_length = np.random.randint(641, 2561)
+        scale = short_side_length / max(img.shape[0], img.shape[1])
+        random_h_radio = np.random.uniform(0.8, 1.2)
+        xscale = scale
+        yscale = scale * random_h_radio
+        img, gts = self._scale_img(gts, img, xscale, yscale)
 
-        img, gts = self._scale_img(gts, img, scale)
-
-        crop_bg = False
-        if np.random.rand() < self.cfg.train.bg_frac:
-            crop_bg = True
+        crop_bg = True if np.random.rand() < self.cfg.train.bg_frac else crop_bg = True
 
         img_croped, gts_croped = self._crop_img(img, gts, crop_bg)
 
