@@ -155,7 +155,7 @@ class Dataset:
         yscale = scale * random_h_radio
         img, gts = self._scale_img(gts, img, xscale, yscale)
 
-        crop_bg = True if np.random.rand() < self.cfg.train.bg_frac else crop_bg = True
+        crop_bg = True if np.random.rand() < self.cfg.train.bg_frac else False
 
         img_croped, gts_croped = self._crop_img(img, gts, crop_bg)
 
@@ -383,16 +383,37 @@ class Dataset:
             False: 必须包含至少一个文字，但是也有可能最后不包含任何文字
         :return:
         """
-        # 先根据 polys 计算出 bounding box
-        ltrb_gts = [(get_ltrb_by4vec(g[0]).astype(np.int32), g[-1]) for g in gts]
-
         h = img.shape[0]
         w = img.shape[1]
+        # 图片周围添加 padding，允许 left-top 点向超出原图范围
+        pad_h = h // 10
+        pad_w = w // 10
+
+        new_h = h + pad_h * 2
+        new_w = w + pad_w * 2
+
+        pad_img = np.zeros((new_h, new_w, 3))
+        pad_img[pad_h:pad_h + h, pad_w:pad_w + w] = img
+
+        if DEBUG:
+            print(pad_img.shape)
+            cv2.imwrite("pad_img.jpg", pad_img)
+
+        # 根据 pad_h, pad_w 修改 gts 坐标
+        pad_gts = []
+        for i in range(len(gts)):
+            gt = deepcopy(gts[i])
+            gt[0][:, 0] += pad_w
+            gt[0][:, 1] += pad_h
+            pad_gts.append(gt)
+
+        # 根据 polys 计算出 bounding box
+        ltrb_gts = [(get_ltrb_by4vec(g[0]).astype(np.int32), g[-1]) for g in pad_gts]
 
         if bg:
             corner_map = self.get_bg_lt_pnts(h, w, ltrb_gts)
         else:
-            corner_map = self.get_valid_lt_pnts(h, w, ltrb_gts)
+            corner_map = self.get_valid_lt_pnts(new_h, new_w, ltrb_gts)
 
         ys, xs = np.where(corner_map > 0)
         if DEBUG:
@@ -404,33 +425,33 @@ class Dataset:
                 print("No valid left-top xy to select!!")
 
             all_ignore = all([ignore for _, ignore in ltrb_gts])
-            # 情况1： 所有 gt 区域都是 ignore=True。进行 random crop，不管有没有划过 ignore 区域
-            if all_ignore:
-                if DEBUG:
-                    print("All text gt ignore=True")
-
-                if w > self.cfg.train.croped_img_size and h > self.cfg.train.croped_img_size:
-                    x = np.random.randint(0, w - self.cfg.train.croped_img_size)
-                    y = np.random.randint(0, h - self.cfg.train.croped_img_size)
-                    croped_img, crop_ltrb = self._crop_by_xy(img, x, y)
-
-                    selected_gts = self.find_polys_in_area(gts, crop_ltrb)
-                    for gt in selected_gts:
-                        gt[0][:, 0] -= crop_ltrb[0]
-                        gt[0][:, 1] -= crop_ltrb[1]
-                    return croped_img, selected_gts
-                else:
-                    xscale = self.cfg.train.croped_img_size / w
-                    yscale = self.cfg.train.croped_img_size / h
-                    img_croped, gts_croped = self._scale_img(gts, img, xscale, yscale)
-                    return img_croped, gts_croped
-            else:
-                if DEBUG:
-                    print("All text gt ltrb width > croped img_size")
-                # 情况2： gt ltrb 的宽度全都过宽，超过了 croped_img_size。
-                # 将 ignore=False 最大的 gt ltrb 缩放到 croped_img_size,根据这个 scale 对全图进行缩放
-                # 返回 None 标志位，在外部进行缩放，然后再调用一次 _crop_img()
-                return None, None
+            # # 情况1： 所有 gt 区域都是 ignore=True。进行 random crop，不管有没有划过 ignore 区域
+            # if all_ignore:
+            #     if DEBUG:
+            #         print("All text gt ignore=True")
+            #
+            #     if w > self.cfg.train.croped_img_size and h > self.cfg.train.croped_img_size:
+            #         x = np.random.randint(0, w - self.cfg.train.croped_img_size)
+            #         y = np.random.randint(0, h - self.cfg.train.croped_img_size)
+            #         croped_img, crop_ltrb = self._crop_by_xy(img, x, y)
+            #
+            #         selected_gts = self.find_polys_in_area(gts, crop_ltrb)
+            #         for gt in selected_gts:
+            #             gt[0][:, 0] -= crop_ltrb[0]
+            #             gt[0][:, 1] -= crop_ltrb[1]
+            #         return croped_img, selected_gts
+            #     else:
+            #         xscale = self.cfg.train.croped_img_size / w
+            #         yscale = self.cfg.train.croped_img_size / h
+            #         img_croped, gts_croped = self._scale_img(gts, img, xscale, yscale)
+            #         return img_croped, gts_croped
+            # else:
+            #     if DEBUG:
+            #         print("All text gt ltrb width > croped img_size")
+            #     # 情况2： gt ltrb 的宽度全都过宽，超过了 croped_img_size。
+            #     # 将 ignore=False 最大的 gt ltrb 缩放到 croped_img_size,根据这个 scale 对全图进行缩放
+            #     # 返回 None 标志位，在外部进行缩放，然后再调用一次 _crop_img()
+            #     return None, None
 
         if DEBUG:
             print('xs length: %d' % len(xs))
@@ -450,7 +471,7 @@ class Dataset:
         if DEBUG:
             print("Random crop selected xy: %d, %d" % (x, y))
 
-        croped_img, crop_ltrb = self._crop_by_xy(img, x, y)
+        croped_img, crop_ltrb = self._crop_by_xy(pad_img, x, y)
 
         if DEBUG:
             print("crop_by_xy result")
@@ -477,9 +498,9 @@ class Dataset:
         for bbox, ignore in ltrb_gts:
             if ignore:
                 continue
-            # bbox 允许的 crop 区域
-            # 如果文字区域很宽，超过了 croped_img_size，可能出现 xmin > xmax 的情况
-            # 如果文字区域很高，超过了 croped_img_size，可能出现 ymin > ymax 的情况
+            # bbox 允许的 crop 区域为： crop area 右下角与 bbox 右下角重合，然后右下移动
+            # 如果文字区域很宽/高，超过了 croped_img_size，可能出现 xmin > xmax/ ymin > ymax 的情况
+            # 这种情况下这个文字区域就无法被 crop 到
             xmin = max(0, bbox[2] - self.cfg.train.croped_img_size)
             ymin = max(0, bbox[3] - self.cfg.train.croped_img_size)
             xmax = max(0, bbox[0])
@@ -487,35 +508,37 @@ class Dataset:
 
             if DEBUG:
                 print("bbox valid left-top lrtb: %d %d %d %d" % (xmin, ymin, xmax, ymax))
+
             corner_map[ymin: ymax, xmin:xmax] = 1
 
         if DEBUG:
             print("valid left-top xy after bbox: %d" % len(np.where(corner_map > 0)[0]))
             cv2.imwrite('valid_bbox_corner_map.jpg', corner_map * 255)
 
-        w_padding = w // 10
-        h_padding = h // 10
-        corner_map[0:h, w - self.cfg.train.croped_img_size + w_padding:w] = 0
+        corner_map[0:h, w - self.cfg.train.croped_img_size:w] = 0
         # 底部 padding 641 的区域内不能作为 left-top
-        corner_map[h - self.cfg.train.croped_img_size + h_padding:h, 0: w] = 0
+        corner_map[h - self.cfg.train.croped_img_size:h, 0: w] = 0
 
         if DEBUG:
             print("valid left-top xy after padding: %d" % len(np.where(corner_map > 0)[0]))
 
-        # bbox 区域不能作为 left-top
         for bbox, ignore in ltrb_gts:
             if ignore:
                 continue
             # bbox 区域不能作为 left-top
             corner_map[bbox[1]:bbox[3], bbox[0]: bbox[2]] = 0
 
-            # bbox 左侧 croped_img_size 区域内的像素都不能作为 left-top 点
-            left_side = max(0, bbox[0] - self.cfg.train.croped_img_size)
-            top_side = max(0, bbox[1] - self.cfg.train.croped_img_size)
-            corner_map[top_side:bbox[3], left_side: bbox[0]] = 0
+            # crop area 右下角与 bbox 右下角重合，然后左上移动
+            xmax = max(0, bbox[2] - self.cfg.train.croped_img_size)
+            ymax = max(0, bbox[3] - self.cfg.train.croped_img_size)
+            xmin = max(0, bbox[0] + self.cfg.train.croped_img_size)
+            ymin = max(0, bbox[1] + self.cfg.train.croped_img_size)
+            corner_map[ymin:ymax, xmin:xmax] = 0
+
         if DEBUG:
             print("valid left-top xy after ignore bbox: %d" % len(np.where(corner_map > 0)[0]))
             cv2.imwrite('valid_corner_map.jpg', corner_map * 255)
+
         return corner_map
 
     def get_bg_lt_pnts(self, h, w, ltrb_gts):
@@ -819,10 +842,10 @@ if __name__ == "__main__":
         cfg,
         # img_dir='/home/cwq/data/MLT2017/val',
         # gt_dir='/home/cwq/data/MLT2017/val_gt',
-        # img_dir='/home/cwq/data/ocr/IC15+IC13/img',
-        # gt_dir='/home/cwq/data/ocr/IC15+IC13/gt',
-        img_dir='/home/cwq/data/ocr/IC15+IC13/train',
-        gt_dir='/home/cwq/data/ocr/IC15+IC13/train_gt',
+        img_dir='/home/cwq/data/ocr/IC15+IC13/img',
+        gt_dir='/home/cwq/data/ocr/IC15+IC13/gt',
+        # img_dir='/home/cwq/data/ocr/IC15+IC13/train',
+        # gt_dir='/home/cwq/data/ocr/IC15+IC13/train_gt',
         converter=converter,
         batch_size=100,
         num_parallel_calls=1,

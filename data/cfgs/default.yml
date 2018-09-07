@@ -28,7 +28,7 @@ B_MEAN: 103.94
 
 train:
   # 30% 的图片只包含背景
-  bg_frac: 0.5
+  bg_frac: 0.0
   croped_img_size: 641
   share_conv_stride: 4
   roi_rotate_fix_height: 8
